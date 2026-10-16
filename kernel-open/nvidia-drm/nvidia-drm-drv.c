@@ -2324,8 +2324,8 @@ static void nv_drm_reprobe_connectors(struct nv_drm_device *nv_dev)
      * frozen.  An immediate hotplug event could drive a modeset (fbdev
      * helper or DRM client) concurrently with the device-resume phase.
      */
-    schedule_delayed_work(&nv_dev->hotplug_event_work,
-                          msecs_to_jiffies(2000));
+    queue_delayed_work(nv_drm_percpu_wq, &nv_dev->hotplug_event_work,
+                       msecs_to_jiffies(2000));
 }
 
 /*
