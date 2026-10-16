@@ -53,6 +53,14 @@ MODULE_PARM_DESC(
 module_param_named(color_pipeline, nv_drm_color_pipeline_module_param, bool, 0444);
 #endif
 
+#if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
+MODULE_PARM_DESC(
+    deadline_boost,
+    "Boost GPU clocks when a fence is about to miss a deadline set by a waiter, "
+    "e.g. a compositor's page flip (1 = enable (default), 0 = disable)");
+module_param_named(deadline_boost, nv_drm_deadline_boost_module_param, bool, 0644);
+#endif
+
 #endif /* NV_DRM_AVAILABLE */
 
 /*************************************************************************

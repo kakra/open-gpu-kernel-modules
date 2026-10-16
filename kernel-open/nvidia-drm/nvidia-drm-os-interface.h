@@ -70,6 +70,8 @@ extern bool nv_drm_vblank_module_param;
 /* Set to true when DRM color pipeline support is enabled. */
 extern bool nv_drm_color_pipeline_module_param;
 #endif
+/* Set to true when fence deadlines may boost GPU clocks. */
+extern bool nv_drm_deadline_boost_module_param;
 
 void *nv_drm_calloc(size_t nmemb, size_t size);
 

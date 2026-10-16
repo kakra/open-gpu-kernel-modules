@@ -29,6 +29,15 @@
 
 struct drm_file;
 struct drm_device;
+struct nv_drm_device;
+
+#if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
+void nv_drm_fence_deadline_init(struct nv_drm_device *nv_dev);
+void nv_drm_fence_deadline_fini(struct nv_drm_device *nv_dev);
+#else
+static inline void nv_drm_fence_deadline_init(struct nv_drm_device *nv_dev) { }
+static inline void nv_drm_fence_deadline_fini(struct nv_drm_device *nv_dev) { }
+#endif
 
 int nv_drm_fence_supported_ioctl(struct drm_device *dev,
                                  void *data, struct drm_file *filep);
