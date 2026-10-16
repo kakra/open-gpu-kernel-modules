@@ -3554,6 +3554,19 @@ static void EvoSetupVBlankRgSemaphoreInterruptC6(
 
     nvUpdateUpdateState(pDevEvo, pUpdateState, pChannel);
 
+    if ((pSurfaceDesc == NULL) || (pSurfaceDesc->ctxDmaHandle == 0)) {
+        /*
+         * Stop the continuous release and its awaken interrupt too; clearing
+         * only the ctxdma handle leaves the per-vblank interrupt running.
+         */
+        nvDmaSetStartEvoMethod(pChannel,
+                               NVC67D_HEAD_SET_RG_REL_SEMAPHORE_CONTROL(head, NVKMS_VBLANK_INTR_SEMAPHORE_INDEX),
+                               1);
+        nvDmaSetEvoMethodData(pChannel,
+                DRF_DEF(C67D, _HEAD_SET_RG_REL_SEMAPHORE_CONTROL, _REL_MODE, _WRITE) |
+                DRF_DEF(C67D, _HEAD_SET_RG_REL_SEMAPHORE_CONTROL, _RUN_MODE, _ONE_TIME));
+    }
+
     /* ctxdma handle 0 disables the semaphore */
     nvDmaSetStartEvoMethod(pChannel,
                            NVC67D_HEAD_SET_CONTEXT_DMA_RG_REL_SEMAPHORE(head, NVKMS_VBLANK_INTR_SEMAPHORE_INDEX),

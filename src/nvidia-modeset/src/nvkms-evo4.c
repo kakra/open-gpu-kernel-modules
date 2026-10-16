@@ -1880,6 +1880,17 @@ static void EvoSetupVBlankRgSemaphoreInterruptC9 (
                 DRF_DEF(C97D, _HEAD_SET_RG_REL_SEMAPHORE_CONTROL, _REL_MODE, _WRITE_AWAKEN) |
                 DRF_DEF(C97D, _HEAD_SET_RG_REL_SEMAPHORE_CONTROL, _RUN_MODE, _CONTINUOUS) |
                 DRF_NUM(C97D, _HEAD_SET_RG_REL_SEMAPHORE_CONTROL, _RASTER_LINE, rasterLine));
+    } else {
+        /*
+         * Stop the continuous release and its awaken interrupt too; clearing
+         * only the surface enable leaves the per-vblank interrupt running.
+         */
+        nvDmaSetStartEvoMethod(pChannel,
+                               NVC97D_HEAD_SET_RG_REL_SEMAPHORE_CONTROL(head, NVKMS_VBLANK_INTR_SEMAPHORE_INDEX),
+                               1);
+        nvDmaSetEvoMethodData(pChannel,
+                DRF_DEF(C97D, _HEAD_SET_RG_REL_SEMAPHORE_CONTROL, _REL_MODE, _WRITE) |
+                DRF_DEF(C97D, _HEAD_SET_RG_REL_SEMAPHORE_CONTROL, _RUN_MODE, _ONE_TIME));
     }
 }
 

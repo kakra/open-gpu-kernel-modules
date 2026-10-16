@@ -3064,11 +3064,15 @@ static void DisableVBlankRgSemaphoreInterrupt(NVDispEvoPtr pDispEvo,
     }
 
     /*
-     * If using local updateState, apply UPDATE to hardware now.
+     * If using local updateState, apply UPDATE to hardware now. Don't wait
+     * for it to complete: this runs with the global NVKMS lock held, e.g.
+     * whenever DRM disables vblank interrupts, and waiting would block flips
+     * for up to a frame. The semaphore surface stays allocated.
      */
     if (pUpdateState == &localUpdateState) {
         if (!nvIsUpdateStateEmpty(pDevEvo, &localUpdateState)) {
-            nvEvoUpdateAndKickOff(pDispEvo, TRUE, &localUpdateState, TRUE);
+            nvEvoUpdateAndKickOff(pDispEvo, FALSE /* sync */,
+                                  &localUpdateState, TRUE);
         }
     }
 
@@ -4521,8 +4525,13 @@ nvApiHeadRegisterRgInterruptCallback(NVDispEvoPtr pDispEvo,
 
             SetupVBlankRgSemaphoreForApiHead(pDispEvo, apiHead, head, &updateState);
 
+            /*
+             * Don't wait for completion with the NVKMS lock held, see
+             * DisableVBlankRgSemaphoreInterrupt().
+             */
             if (!nvIsUpdateStateEmpty(pDispEvo->pDevEvo, &updateState)) {
-                nvEvoUpdateAndKickOff(pDispEvo, TRUE, &updateState, TRUE);
+                nvEvoUpdateAndKickOff(pDispEvo, FALSE /* sync */,
+                                      &updateState, TRUE);
             }
         }
     }
