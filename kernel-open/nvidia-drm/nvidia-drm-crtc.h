@@ -43,12 +43,44 @@
 #include "nvkms-kapi.h"
 #include "nv_drm_common_ioctl.h"
 
+#define NV_DRM_VBLANK_HISTORY 16
+
 struct nv_drm_crtc {
     NvU32 head;
 
 #if defined(NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP)
     /* Last vblank timestamp stored when callback occurs (nanoseconds) */
     NvU64 last_vblank_time;
+
+    /*
+     * Recently handled vblanks (hardware timestamp and DRM vblank count),
+     * oldest first starting at vblank_history_next - vblank_history_len.
+     * Used to report flip events at the vblank the flip happened at, see
+     * nv_drm_crtc_handle_flip_events(). Protected by dev->vblank_time_lock.
+     */
+    struct {
+        NvU64 time;
+        u64 count;
+    } vblank_history[NV_DRM_VBLANK_HISTORY];
+    unsigned int vblank_history_len;
+    unsigned int vblank_history_next;
+
+    /*
+     * Length of the vertical blanking interval of the current mode, so the
+     * start of a vblank can be derived from its timestamp (which points at
+     * the first active line). Protected by dev->vblank_time_lock.
+     */
+    NvU64 vblank_duration_ns;
+
+    /*
+     * Flips whose completion event arrived before the vblank they happened
+     * at was handled; their DRM events are sent from the vblank callback.
+     * Protected by dev->event_lock.
+     */
+    struct list_head pending_flip_events;
+
+    /* Sends pending flip events if no vblank callback arrives in time */
+    struct delayed_work pending_flip_events_work;
 #endif
 
     /* True if a real vblank interrupt has fired since vblank was enabled.
@@ -141,6 +173,15 @@ struct nv_drm_flip {
      * @deferred_flip_list.
      */
     struct list_head deferred_flip_list;
+
+    /**
+     * @submit_time:
+     *
+     * CLOCK_MONOTONIC time (ns) just before the flip was handed to NVKMS. The
+     * flip happens at the first vblank starting after this. Zero if the flip
+     * may happen later (tearing flips, unsignaled acquire fences).
+     */
+    NvU64 submit_time;
 };
 
 struct nv_drm_crtc_state {
@@ -310,6 +351,17 @@ static inline struct nv_drm_crtc *to_nv_crtc(struct drm_crtc *crtc)
     }
     return container_of(crtc, struct nv_drm_crtc, base);
 }
+
+bool nv_drm_crtc_handle_flip_events(struct nv_drm_crtc *nv_crtc,
+                                    struct nv_drm_flip **pp_nv_flip);
+
+bool nv_drm_crtc_has_pending_flip_events(struct nv_drm_crtc *nv_crtc);
+
+bool nv_drm_crtc_defer_flip_to_pending(struct nv_drm_crtc *nv_crtc,
+                                       struct nv_drm_flip *nv_flip);
+
+void nv_drm_crtc_set_vblank_duration(struct nv_drm_crtc *nv_crtc,
+                                     const struct drm_crtc_state *crtc_state);
 
 /*
  * CRTCs are static objects, list does not change once after initialization and
