@@ -35,10 +35,27 @@
 #include <drm/drm_device.h>
 #include <drm/drm_gem.h>
 
+#include <linux/workqueue.h>
+
 #if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
 #include <linux/dma-fence.h>
 #include <linux/hrtimer.h>
-#include <linux/workqueue.h>
+#endif
+
+/*
+ * system_wq and system_unbound_wq are deprecated in favour of
+ * system_percpu_wq and system_dfl_wq where those exist.
+ */
+#if NV_IS_EXPORT_SYMBOL_PRESENT_system_percpu_wq
+#define nv_drm_percpu_wq system_percpu_wq
+#else
+#define nv_drm_percpu_wq system_wq
+#endif
+
+#if NV_IS_EXPORT_SYMBOL_PRESENT_system_dfl_wq
+#define nv_drm_dfl_wq system_dfl_wq
+#else
+#define nv_drm_dfl_wq system_unbound_wq
 #endif
 
 #include "nvidia-drm-os-interface.h"
