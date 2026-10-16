@@ -72,6 +72,7 @@ kchangrpapiConstruct_IMPL
     CTX_BUF_INFO                           *bufInfoList         = NULL;
     NvU32                                   bufCount            = 0;
     NvBool                                  bReserveMem         = NV_FALSE;
+    NvBool                                  bRpcAllocated       = NV_FALSE;
     MIG_INSTANCE_REF                        ref;
     RM_API                                 *pRmApi              = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
     KernelChannelGroup                     *pKernelChannelGroup = NULL;
@@ -479,6 +480,8 @@ kchangrpapiConstruct_IMPL
             goto failed;
         }
 
+        bRpcAllocated = NV_TRUE;
+
         if (IS_VIRTUAL_WITH_FULL_SRIOV(pGpu) || IS_GSP_CLIENT(pGpu))
         {
             NVA06C_CTRL_INTERNAL_PROMOTE_FAULT_METHOD_BUFFERS_PARAMS params = {
@@ -559,6 +562,24 @@ failed:
         {
             pRmApi->Free(pRmApi, pParams->hClient,
                          pKernelChannelGroupApi->hKernelGraphicsContext);
+        }
+
+        //
+        // The resource server does not run the destructor when construction
+        // fails, so the object allocated on the host/GSP by the RPC above must
+        // be freed here. Otherwise a retry with the same handle fails with
+        // NV_ERR_INSERT_DUPLICATE_NAME.
+        //
+        if (bRpcAllocated)
+        {
+            NV_STATUS tmpStatus = NV_OK;
+
+            NV_RM_RPC_FREE(pGpu,
+                           pParams->hClient,
+                           pParams->hParent,
+                           pParams->hResource,
+                           tmpStatus);
+            NV_ASSERT(tmpStatus == NV_OK);
         }
 
         if (pKernelChannelGroup != NULL)
