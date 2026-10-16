@@ -88,6 +88,14 @@ struct NvKmsKapiDevice {
 
     NvU32 hRmClient;
     NvU32 hRmDevice, hRmSubDevice;
+
+    /*
+     * Separate RM client for perfBoost(). A boost request waits for GSP-RM
+     * while holding its client's lock, which would otherwise block the
+     * semaphore surface waiter controls made on hRmClient for every fence
+     * wait. 0 if it couldn't be allocated; hRmClient is used then.
+     */
+    NvU32 hRmPerfClient, hRmPerfSubDevice;
     NvU32 deviceInstance;
 
     NVUnixRmHandleAllocatorRec handleAllocator;

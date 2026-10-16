@@ -918,6 +918,8 @@ static int nv_drm_dev_load(struct drm_device *dev)
 
     init_waitqueue_head(&nv_dev->flip_event_wq);
 
+    nv_drm_fence_deadline_init(nv_dev);
+
     mutex_unlock(&nv_dev->lock);
 
     return 0;
@@ -945,6 +947,7 @@ static void nv_drm_dev_unload(struct drm_device *dev)
 #endif
 
     cancel_delayed_work_sync(&nv_dev->hotplug_event_work);
+    nv_drm_fence_deadline_fini(nv_dev);
     mutex_lock(&nv_dev->lock);
 
     WARN_ON(nv_dev->subOwnershipGranted);

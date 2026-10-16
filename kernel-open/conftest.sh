@@ -4440,6 +4440,22 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_DMA_FENCE_OPS_HAS_USE_64BIT_SEQNO" "" "types"
         ;;
 
+        fence_ops_set_deadline)
+            #
+            # Determine if dma_fence_ops has the set_deadline member, used by
+            # fence waiters (e.g. sync_file SYNC_IOC_SET_DEADLINE) to tell the
+            # signaler when the fence is needed.
+            #
+            CODE="
+            #include <linux/dma-fence.h>
+            int conftest_fence_ops_set_deadline(void)
+            {
+                return offsetof(struct dma_fence_ops, set_deadline);
+            }"
+
+            compile_check_conftest "$CODE" "NV_DMA_FENCE_OPS_HAS_SET_DEADLINE" "" "types"
+        ;;
+
         drm_fbdev_generic_setup)
             #
             # Determine whether drm_fbdev_generic_setup is present.

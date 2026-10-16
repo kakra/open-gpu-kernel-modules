@@ -36,6 +36,10 @@
 
 #include <linux/dma-fence.h>
 
+#if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
+#include <linux/delay.h>
+#endif
+
 #if defined(NV_DRM_SYNCOBJ_FEATURES_PRESENT)
 #include <drm/drm_syncobj.h>
 #endif
@@ -58,6 +62,526 @@ struct nv_drm_fence_context {
 
     NvU64 fenceSemIndex; /* Index into semaphore surface */
 };
+
+#if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
+
+/*
+ * Fence deadline handling.
+ *
+ * Waiters such as compositors tell us when they need a fence signaled (e.g.
+ * KWin sets the deadline to the latest time it can still commit a page flip
+ * for the next vblank). If fences keep missing their deadlines, the GPU is
+ * likely running at clocks too low for the workload, so ask RM for a short
+ * boost rather than waiting for the clock governor to notice.
+ *
+ * Up to NV_DRM_DEADLINE_SLOTS pending deadlines per device are tracked at a
+ * time (e.g. one per output of a compositor). When a deadline is set, a timer
+ * is armed for (deadline - margin) and a callback is added to the fence. A
+ * work item checks the deadline once either fires: if the fence hasn't
+ * signaled by the time the timer fired, the deadline is counted as missed.
+ * Either way the slot is released for the next deadline.
+ *
+ * Deadlines that are already past, or too close to be achievable, when they
+ * are set are ignored: KWin derives its deadline from the next vblank at the
+ * time it queues a commit, so frames rendered on demand often get a deadline
+ * that no GPU could meet, and KWin simply flips at a later vblank.
+ *
+ * A miss is only blamed on clocks if the GPU has not reached the fence's
+ * semaphore value yet. If it has, the work finished in time and only the
+ * fence signaling path (RM -> NVKMS -> nvidia-drm) was late, which faster
+ * clocks would not fix.
+ *
+ * A boost takes effect tens to hundreds of milliseconds after it is
+ * requested, so it cannot rescue the frame that missed; it only helps if
+ * misses keep happening. Boost once NV_DRM_DEADLINE_MISSES deadlines have
+ * been missed within NV_DRM_DEADLINE_MISS_WINDOW_MS.
+ *
+ * Also boost before misses pile up. A checked deadline is tight if its fence
+ * signaled with less than (100 - NV_DRM_DEADLINE_TIGHT_PCT)% of the time
+ * between setting the deadline and the deadline to spare, or missed while the
+ * GPU was still busy (not if it missed only because signaling was late).
+ * NV_DRM_DEADLINE_ONSET_FRAMES tight frames within
+ * NV_DRM_DEADLINE_ONSET_WINDOW_MS boost, however many other frames come
+ * between them: at low clocks tight frames show up one at a time, about a
+ * second apart, among hundreds of easy ones. The governor only raises clocks
+ * on sustained utilization, which compositing at low clocks doesn't reach.
+ *
+ * A boost request holds the GPU lock while GSP processes it, which takes
+ * several milliseconds (tens if clocks actually change), so requests are
+ * made from a separate unbound work item and rate limited to roughly one per
+ * boost period.
+ *
+ * Light rendering at the lowest P-state misses deadlines every few seconds
+ * indefinitely: the governor never raises clocks for it, so the triggers
+ * keep firing and the GPU would stay boosted whenever anything is on screen.
+ * Back off instead: each boost triggered before NV_DRM_DEADLINE_BACKOFF_RESET_MS
+ * have passed without a trigger doubles the wait before the next one, up to
+ * NV_DRM_DEADLINE_BACKOFF_MAX_MS. Such workloads then mostly run at low
+ * clocks and accept the occasional miss.
+ */
+#define NV_DRM_DEADLINE_BOOST_DURATION_S  1
+#define NV_DRM_DEADLINE_BOOST_REARM_MS    750
+#define NV_DRM_DEADLINE_MISS_WINDOW_MS    1000
+#define NV_DRM_DEADLINE_MISSES            3
+#define NV_DRM_DEADLINE_TIGHT_PCT         75
+#define NV_DRM_DEADLINE_ONSET_FRAMES      2
+#define NV_DRM_DEADLINE_ONSET_WINDOW_MS   2500
+#define NV_DRM_DEADLINE_BACKOFF_MAX_MS    16000
+#define NV_DRM_DEADLINE_BACKOFF_RESET_MS  10000
+/* Deadlines set closer than this could not have been met */
+#define NV_DRM_DEADLINE_MIN_LEAD_US       1000
+
+static bool __nv_drm_fence_gpu_done(struct dma_fence *fence,
+                                    struct nv_drm_fence_context *fctx,
+                                    bool semsurf);
+
+/*
+ * Arm the timer for an armed slot's deadline, or queue the check right away
+ * if it is already due. Called with deadline.lock held.
+ */
+static void __nv_drm_deadline_arm(struct nv_drm_deadline_slot *slot,
+                                  ktime_t now)
+{
+    if (ktime_before(now, slot->deadline)) {
+        hrtimer_start(&slot->timer, slot->deadline, HRTIMER_MODE_ABS);
+    } else {
+        queue_work(system_highpri_wq, &slot->nv_dev->deadline.work);
+    }
+}
+
+/*
+ * Stop a slot's timer and fence callback, and drop its references. Called
+ * from process context with the slot in the BUSY state.
+ */
+static void __nv_drm_deadline_release_slot(struct nv_drm_deadline_slot *slot)
+{
+    struct nv_drm_device *nv_dev = slot->nv_dev;
+    struct dma_fence *fence = slot->fence;
+    struct nv_drm_fence_context *fctx = slot->fctx;
+    unsigned long flags;
+
+    hrtimer_cancel(&slot->timer);
+    dma_fence_remove_callback(fence, &slot->cb);
+
+    spin_lock_irqsave(&nv_dev->deadline.lock, flags);
+    slot->fence = NULL;
+    slot->fctx = NULL;
+    slot->state = NV_DRM_DEADLINE_SLOT_FREE;
+    spin_unlock_irqrestore(&nv_dev->deadline.lock, flags);
+
+    dma_fence_put(fence);
+    nv_drm_gem_object_unreference_unlocked(&fctx->base);
+}
+
+static void __nv_drm_deadline_boost_work(struct work_struct *work)
+{
+    struct nv_drm_device *nv_dev =
+        container_of(work, struct nv_drm_device, deadline.boost_work);
+
+    nvKms->perfBoost(nv_dev->pDevice, NV_DRM_DEADLINE_BOOST_DURATION_S);
+}
+
+/* Request a boost unless one was requested recently. Returns true if it did. */
+static bool __nv_drm_deadline_request_boost(struct nv_drm_device *nv_dev)
+{
+    const unsigned long now = jiffies;
+
+    if (!nv_drm_deadline_boost_module_param) {
+        return false;
+    }
+
+    /* A trigger after a calm period starts over at the shortest wait */
+    if (nv_dev->deadline.last_trigger == 0 ||
+        time_after(now,
+                   nv_dev->deadline.last_trigger +
+                   msecs_to_jiffies(NV_DRM_DEADLINE_BACKOFF_RESET_MS))) {
+        nv_dev->deadline.boost_interval_ms = NV_DRM_DEADLINE_BOOST_REARM_MS;
+    }
+
+    nv_dev->deadline.last_trigger = now;
+
+    if (nv_dev->deadline.last_boost != 0 &&
+        time_before(now,
+                    nv_dev->deadline.last_boost +
+                    msecs_to_jiffies(nv_dev->deadline.boost_interval_ms))) {
+        return false;
+    }
+
+    nv_dev->deadline.last_boost = now;
+
+    nv_dev->deadline.boost_interval_ms =
+        min(nv_dev->deadline.boost_interval_ms * 2,
+            (unsigned int)NV_DRM_DEADLINE_BACKOFF_MAX_MS);
+
+    queue_work(system_unbound_wq, &nv_dev->deadline.boost_work);
+
+    return true;
+}
+
+/* Count a miss blamed on clocks, and boost if misses keep happening. */
+static void __nv_drm_deadline_missed(struct nv_drm_device *nv_dev)
+{
+    if (nv_dev->deadline.miss_count == 0 ||
+        time_after(jiffies,
+                   nv_dev->deadline.miss_window_start +
+                   msecs_to_jiffies(NV_DRM_DEADLINE_MISS_WINDOW_MS))) {
+        nv_dev->deadline.miss_window_start = jiffies;
+        nv_dev->deadline.miss_count = 0;
+    }
+
+    if (++nv_dev->deadline.miss_count < NV_DRM_DEADLINE_MISSES) {
+        return;
+    }
+
+    nv_dev->deadline.miss_count = 0;
+
+    __nv_drm_deadline_request_boost(nv_dev);
+}
+
+/*
+ * Whether a deadline whose fence signaled at signal_time used at least
+ * NV_DRM_DEADLINE_TIGHT_PCT% of the time between setting the deadline and the
+ * deadline.
+ */
+static bool __nv_drm_deadline_tight(const struct nv_drm_deadline_slot *slot,
+                                    ktime_t signal_time)
+{
+    const s64 lead_ns = ktime_to_ns(ktime_sub(slot->deadline, slot->set_time));
+    const s64 used_ns = ktime_to_ns(ktime_sub(signal_time, slot->set_time));
+
+    return (lead_ns > 0) &&
+           (used_ns * 100 >= lead_ns * NV_DRM_DEADLINE_TIGHT_PCT);
+}
+
+/* Count a tight frame, and boost if they keep coming. */
+static void __nv_drm_deadline_onset(struct nv_drm_device *nv_dev, ktime_t now)
+{
+    if (nv_dev->deadline.tight_count == 0 ||
+        ktime_ms_delta(now, nv_dev->deadline.tight_window_start) >=
+        NV_DRM_DEADLINE_ONSET_WINDOW_MS) {
+        nv_dev->deadline.tight_window_start = now;
+        nv_dev->deadline.tight_count = 0;
+    }
+
+    if (++nv_dev->deadline.tight_count < NV_DRM_DEADLINE_ONSET_FRAMES) {
+        return;
+    }
+
+    nv_dev->deadline.tight_count = 0;
+
+    __nv_drm_deadline_request_boost(nv_dev);
+}
+
+/*
+ * Check a slot whose deadline is due or whose fence signaled, then release
+ * it. Called from the deadline work with the slot in the BUSY state.
+ */
+static void __nv_drm_deadline_check_slot(struct nv_drm_deadline_slot *slot,
+                                         ktime_t now)
+{
+    struct nv_drm_device *nv_dev = slot->nv_dev;
+    const ktime_t deadline = slot->deadline;
+    bool signaled, gpu_done, tight = false;
+
+    /*
+     * Read the semaphore before the signaled bit, so a fence that is still
+     * unsignaled afterwards had already completed on the GPU before we looked.
+     */
+    gpu_done = __nv_drm_fence_gpu_done(slot->fence, slot->fctx, slot->semsurf);
+    signaled = dma_fence_is_signaled(slot->fence);
+
+    if (signaled) {
+        /* The timestamp is set just after the signaled bit */
+        const ktime_t signal_time =
+            test_bit(DMA_FENCE_FLAG_TIMESTAMP_BIT, &slot->fence->flags) ?
+            slot->fence->timestamp : now;
+
+        tight = __nv_drm_deadline_tight(slot, signal_time);
+    } else if (!gpu_done) {
+        tight = true;
+    }
+
+    __nv_drm_deadline_release_slot(slot);
+
+    if (tight) {
+        __nv_drm_deadline_onset(nv_dev, now);
+    }
+
+    /* Picked up early only because the fence signaled */
+    if (ktime_before(now, deadline) || signaled) {
+        return;
+    }
+
+    if (gpu_done) {
+        /* Only signaling was late; boosting clocks would not help */
+        return;
+    }
+
+    if (nv_drm_deadline_boost_module_param) {
+        __nv_drm_deadline_missed(nv_dev);
+    }
+}
+
+static void __nv_drm_deadline_work(struct work_struct *work)
+{
+    struct nv_drm_device *nv_dev =
+        container_of(work, struct nv_drm_device, deadline.work);
+    struct nv_drm_deadline_slot *due[NV_DRM_DEADLINE_SLOTS];
+    unsigned int num_due = 0, i;
+    unsigned long flags;
+    ktime_t now;
+
+    spin_lock_irqsave(&nv_dev->deadline.lock, flags);
+
+    now = ktime_get();
+
+    /* Once disabled, nv_drm_fence_deadline_fini() releases the slots */
+    for (i = 0; nv_dev->deadline.enabled && i < NV_DRM_DEADLINE_SLOTS; i++) {
+        struct nv_drm_deadline_slot *slot = &nv_dev->deadline.slots[i];
+
+        if (slot->state != NV_DRM_DEADLINE_SLOT_ARMED ||
+            (ktime_before(now, slot->deadline) &&
+             !test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &slot->fence->flags))) {
+            continue;
+        }
+
+        slot->state = NV_DRM_DEADLINE_SLOT_BUSY;
+        due[num_due++] = slot;
+    }
+
+    spin_unlock_irqrestore(&nv_dev->deadline.lock, flags);
+
+    for (i = 0; i < num_due; i++) {
+        __nv_drm_deadline_check_slot(due[i], now);
+    }
+}
+
+static enum hrtimer_restart __nv_drm_deadline_timer(struct hrtimer *timer)
+{
+    struct nv_drm_deadline_slot *slot =
+        container_of(timer, struct nv_drm_deadline_slot, timer);
+
+    queue_work(system_highpri_wq, &slot->nv_dev->deadline.work);
+
+    return HRTIMER_NORESTART;
+}
+
+static void __nv_drm_deadline_fence_cb(struct dma_fence *fence,
+                                       struct dma_fence_cb *cb)
+{
+    struct nv_drm_deadline_slot *slot =
+        container_of(cb, struct nv_drm_deadline_slot, cb);
+
+    queue_work(system_highpri_wq, &slot->nv_dev->deadline.work);
+}
+
+/*
+ * Called from dma_fence_ops::set_deadline, which may be invoked from any
+ * context. fence_lock is the lock the fence was initialized with.
+ */
+static void __nv_drm_fence_set_deadline(struct nv_drm_fence_context *fctx,
+                                        struct dma_fence *fence,
+                                        spinlock_t *fence_lock,
+                                        bool semsurf,
+                                        ktime_t deadline)
+{
+    struct nv_drm_device *nv_dev = NULL;
+    struct nv_drm_deadline_slot *slot = NULL;
+    unsigned long flags, fence_flags;
+    ktime_t now;
+    bool added;
+    unsigned int i;
+
+    if (!nv_drm_deadline_boost_module_param ||
+        test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags)) {
+        return;
+    }
+
+    now = ktime_get();
+
+    /* Not achievable when set, so missing it says nothing about clocks */
+    if (ktime_us_delta(deadline, now) < NV_DRM_DEADLINE_MIN_LEAD_US) {
+        return;
+    }
+
+    /*
+     * Fence contexts force-signal their pending fences, under each fence's
+     * lock, before they are freed. So while the fence is unsignaled and its
+     * lock is held, its context (and device) are still allocated.
+     */
+    spin_lock_irqsave(fence_lock, fence_flags);
+
+    if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->flags)) {
+        goto unlock_fence;
+    }
+
+    nv_dev = fctx->nv_dev;
+
+    spin_lock(&nv_dev->deadline.lock);
+
+    if (!nv_dev->deadline.enabled) {
+        goto unlock_device;
+    }
+
+    for (i = 0; i < NV_DRM_DEADLINE_SLOTS; i++) {
+        struct nv_drm_deadline_slot *s = &nv_dev->deadline.slots[i];
+
+        if (s->state == NV_DRM_DEADLINE_SLOT_FREE) {
+            if (slot == NULL) {
+                slot = s;
+            }
+        } else if (s->fence == fence) {
+            /* Already tracked; only the earliest deadline matters */
+            if (s->state != NV_DRM_DEADLINE_SLOT_BUSY &&
+                ktime_before(deadline, s->deadline)) {
+                s->deadline = deadline;
+                if (s->state == NV_DRM_DEADLINE_SLOT_ARMED) {
+                    __nv_drm_deadline_arm(s, now);
+                }
+            }
+            slot = NULL;
+            goto unlock_device;
+        }
+    }
+
+    if (slot == NULL) {
+        goto unlock_device;
+    }
+
+    /*
+     * Pin the fence context so the work item can read its semaphore. A
+     * context whose refcount already reached zero is being destroyed.
+     */
+    if (!kref_get_unless_zero(&fctx->base.base.refcount)) {
+        slot = NULL;
+        goto unlock_device;
+    }
+
+    slot->state = NV_DRM_DEADLINE_SLOT_SETUP;
+    slot->fence = dma_fence_get(fence);
+    slot->fctx = fctx;
+    slot->semsurf = semsurf;
+    slot->deadline = deadline;
+    slot->set_time = now;
+
+unlock_device:
+    spin_unlock(&nv_dev->deadline.lock);
+unlock_fence:
+    spin_unlock_irqrestore(fence_lock, fence_flags);
+
+    if (slot == NULL) {
+        return;
+    }
+
+    /*
+     * Release the slot as soon as the fence signals, so it can track the
+     * next deadline. This takes the fence's lock, so can't be done above.
+     */
+    added = dma_fence_add_callback(fence, &slot->cb,
+                                   __nv_drm_deadline_fence_cb) == 0;
+
+    spin_lock_irqsave(&nv_dev->deadline.lock, flags);
+
+    slot->state = NV_DRM_DEADLINE_SLOT_ARMED;
+
+    /* Once disabled, nv_drm_fence_deadline_fini() releases the slot */
+    if (nv_dev->deadline.enabled) {
+        if (added) {
+            __nv_drm_deadline_arm(slot, ktime_get());
+        } else {
+            /* Already signaled */
+            queue_work(system_highpri_wq, &nv_dev->deadline.work);
+        }
+    }
+
+    spin_unlock_irqrestore(&nv_dev->deadline.lock, flags);
+}
+
+void nv_drm_fence_deadline_init(struct nv_drm_device *nv_dev)
+{
+    unsigned int i;
+
+    spin_lock_init(&nv_dev->deadline.lock);
+
+    for (i = 0; i < NV_DRM_DEADLINE_SLOTS; i++) {
+        struct nv_drm_deadline_slot *slot = &nv_dev->deadline.slots[i];
+
+        slot->nv_dev = nv_dev;
+        slot->state = NV_DRM_DEADLINE_SLOT_FREE;
+        slot->fence = NULL;
+        slot->fctx = NULL;
+
+#if NV_IS_EXPORT_SYMBOL_PRESENT_hrtimer_setup
+        hrtimer_setup(&slot->timer, __nv_drm_deadline_timer,
+                      CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+#else
+        hrtimer_init(&slot->timer, CLOCK_MONOTONIC, HRTIMER_MODE_ABS);
+        slot->timer.function = __nv_drm_deadline_timer;
+#endif
+    }
+
+    INIT_WORK(&nv_dev->deadline.work, __nv_drm_deadline_work);
+    INIT_WORK(&nv_dev->deadline.boost_work, __nv_drm_deadline_boost_work);
+
+    nv_dev->deadline.last_boost = 0;
+    nv_dev->deadline.last_trigger = 0;
+    nv_dev->deadline.boost_interval_ms = NV_DRM_DEADLINE_BOOST_REARM_MS;
+    nv_dev->deadline.miss_count = 0;
+    nv_dev->deadline.tight_count = 0;
+
+    nv_dev->deadline.enabled = true;
+}
+
+void nv_drm_fence_deadline_fini(struct nv_drm_device *nv_dev)
+{
+    unsigned long flags;
+    bool setup;
+
+    spin_lock_irqsave(&nv_dev->deadline.lock, flags);
+    nv_dev->deadline.enabled = false;
+    spin_unlock_irqrestore(&nv_dev->deadline.lock, flags);
+
+    /* Finishes checking the slots it took; it won't take any more */
+    cancel_work_sync(&nv_dev->deadline.work);
+
+    /*
+     * Release the remaining slots. A slot still being set up becomes armed
+     * shortly, without its timer started.
+     */
+    do {
+        struct nv_drm_deadline_slot *armed[NV_DRM_DEADLINE_SLOTS];
+        unsigned int num_armed = 0, i;
+
+        setup = false;
+
+        spin_lock_irqsave(&nv_dev->deadline.lock, flags);
+        for (i = 0; i < NV_DRM_DEADLINE_SLOTS; i++) {
+            struct nv_drm_deadline_slot *slot = &nv_dev->deadline.slots[i];
+
+            if (slot->state == NV_DRM_DEADLINE_SLOT_ARMED) {
+                slot->state = NV_DRM_DEADLINE_SLOT_BUSY;
+                armed[num_armed++] = slot;
+            } else if (slot->state == NV_DRM_DEADLINE_SLOT_SETUP) {
+                setup = true;
+            }
+        }
+        spin_unlock_irqrestore(&nv_dev->deadline.lock, flags);
+
+        for (i = 0; i < num_armed; i++) {
+            __nv_drm_deadline_release_slot(armed[i]);
+        }
+
+        if (setup) {
+            msleep(1);
+        }
+    } while (setup);
+
+    /* Fence callbacks or timers may have queued it again meanwhile */
+    cancel_work_sync(&nv_dev->deadline.work);
+    cancel_work_sync(&nv_dev->deadline.boost_work);
+}
+
+#endif /* NV_DMA_FENCE_OPS_HAS_SET_DEADLINE */
 
 struct nv_drm_prime_fence_context {
     struct nv_drm_fence_context base;
@@ -87,6 +611,7 @@ struct nv_drm_prime_fence {
     struct list_head list_entry;
     struct dma_fence base;
     spinlock_t lock;
+    struct nv_drm_fence_context *ctx;
 };
 
 static inline
@@ -138,12 +663,27 @@ nv_drm_gem_prime_fence_op_wait(struct dma_fence *fence,
                                   msecs_to_jiffies(96) : timeout);
 }
 
+#if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
+static void
+nv_drm_gem_prime_fence_op_set_deadline(struct dma_fence *fence,
+                                       ktime_t deadline)
+{
+    struct nv_drm_prime_fence *nv_fence = to_nv_drm_prime_fence(fence);
+
+    __nv_drm_fence_set_deadline(nv_fence->ctx, fence, &nv_fence->lock,
+                                false /* semsurf */, deadline);
+}
+#endif
+
 static const struct dma_fence_ops nv_drm_gem_prime_fence_ops = {
     .get_driver_name = nv_drm_gem_fence_op_get_driver_name,
     .get_timeline_name = nv_drm_gem_prime_fence_op_get_timeline_name,
     .enable_signaling = nv_drm_gem_prime_fence_op_enable_signaling,
     .release = nv_drm_gem_prime_fence_op_release,
     .wait = nv_drm_gem_prime_fence_op_wait,
+#if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
+    .set_deadline = nv_drm_gem_prime_fence_op_set_deadline,
+#endif
 };
 
 static inline void
@@ -370,6 +910,8 @@ static struct dma_fence *__nv_drm_prime_fence_context_create_fence(
     INIT_LIST_HEAD(&nv_fence->list_entry);
 
     spin_lock_init(&nv_fence->lock);
+
+    nv_fence->ctx = &nv_prime_fence_context->base;
 
     dma_fence_init(&nv_fence->base, &nv_drm_gem_prime_fence_ops,
                    &nv_fence->lock, nv_prime_fence_context->base.context,
@@ -619,6 +1161,8 @@ struct nv_drm_semsurf_fence {
      * when this fence times out.
      */
     unsigned long timeout;
+
+    struct nv_drm_fence_context *ctx;
 };
 
 struct nv_drm_semsurf_fence_callback {
@@ -1370,6 +1914,18 @@ __nv_drm_semsurf_fence_op_release(struct dma_fence *fence)
     nv_drm_free(nv_fence);
 }
 
+#if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
+static void
+__nv_drm_semsurf_fence_op_set_deadline(struct dma_fence *fence,
+                                       ktime_t deadline)
+{
+    struct nv_drm_semsurf_fence *nv_fence = to_nv_drm_semsurf_fence(fence);
+
+    __nv_drm_fence_set_deadline(nv_fence->ctx, fence, &nv_fence->lock,
+                                true /* semsurf */, deadline);
+}
+#endif
+
 static const struct dma_fence_ops nv_drm_semsurf_fence_ops = {
     .get_driver_name = nv_drm_gem_fence_op_get_driver_name,
     .get_timeline_name = __nv_drm_semsurf_fence_op_get_timeline_name,
@@ -1378,6 +1934,9 @@ static const struct dma_fence_ops nv_drm_semsurf_fence_ops = {
     .wait = dma_fence_default_wait,
 #if defined(NV_DMA_FENCE_OPS_HAS_USE_64BIT_SEQNO)
     .use_64bit_seqno = true,
+#endif
+#if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
+    .set_deadline = __nv_drm_semsurf_fence_op_set_deadline,
 #endif
 };
 
@@ -1459,6 +2018,7 @@ static struct dma_fence *__nv_drm_semsurf_fence_ctx_create_fence(
 #if !defined(NV_DMA_FENCE_OPS_HAS_USE_64BIT_SEQNO)
     nv_fence->wait_value = wait_value;
 #endif
+    nv_fence->ctx = &ctx->base;
 
     /* Initializes the fence with one reference (for the caller) */
     dma_fence_init(fence, &nv_drm_semsurf_fence_ops,
@@ -2001,5 +2561,31 @@ done:
     return -EOPNOTSUPP;
 #endif /* NV_DRM_SYNCOBJ_FEATURES_PRESENT */
 }
+
+#if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
+/*
+ * Whether the GPU has reached the fence's semaphore value, regardless of
+ * whether the fence has been signaled yet. The caller holds a reference to
+ * the fence context.
+ */
+static bool __nv_drm_fence_gpu_done(struct dma_fence *fence,
+                                    struct nv_drm_fence_context *fctx,
+                                    bool semsurf)
+{
+    if (semsurf) {
+        return __nv_drm_get_semsurf_ctx_seqno(to_semsurf_fence_ctx(fctx)) >=
+               __nv_drm_get_semsurf_fence_seqno(to_nv_drm_semsurf_fence(fence));
+    } else {
+        struct nv_drm_prime_fence_context *nv_prime_fence_context =
+            to_nv_prime_fence_context(fctx);
+        /* Index into surface with 16 byte stride */
+        unsigned int seqno =
+            READ_ONCE(*(nv_prime_fence_context->pLinearAddress +
+                        (fctx->fenceSemIndex * 4)));
+
+        return fence->seqno <= seqno;
+    }
+}
+#endif
 
 #endif /* NV_DRM_AVAILABLE */

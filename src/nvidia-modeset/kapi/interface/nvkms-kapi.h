@@ -1671,6 +1671,24 @@ struct NvKmsKapiFunctionsTable {
         struct NvKmsKapiDevice *device,
         const NvU32 head,
         struct NvKmsKapiVblankIntrCallback *pCallback);
+
+    /*!
+     * Temporarily boost the GPU to its highest performance state.
+     *
+     * This is a synchronous RM control that is forwarded to GSP and holds the
+     * GPU lock while the clock change is performed, so it may block for tens
+     * of milliseconds. Must be called from a context that can sleep.
+     *
+     * \param [in]  device       A device allocated using allocateDevice().
+     *
+     * \param [in]  durationSec  How long the boost should last, in seconds.
+     *
+     * \return NV_TRUE on success, NV_FALSE on failure.
+     */
+    NvBool (*perfBoost)(
+        const struct NvKmsKapiDevice *device,
+        NvU32 durationSec
+    );
 };
 
 /** @} */

@@ -35,6 +35,12 @@
 #include <drm/drm_device.h>
 #include <drm/drm_gem.h>
 
+#if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
+#include <linux/dma-fence.h>
+#include <linux/hrtimer.h>
+#include <linux/workqueue.h>
+#endif
+
 #include "nvidia-drm-os-interface.h"
 
 #include "nvkms-kapi.h"
@@ -97,6 +103,44 @@ enum nv_drm_dithering_mode {
     NV_DRM_DITHERING_MODE_ON,
     NV_DRM_DITHERING_MODE_MAX
 };
+
+struct nv_drm_fence_context;
+
+#if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
+/* Number of fence deadlines tracked at once per device */
+#define NV_DRM_DEADLINE_SLOTS 4
+
+enum nv_drm_deadline_slot_state {
+    NV_DRM_DEADLINE_SLOT_FREE,
+    /* Being set up by set_deadline, which arms it */
+    NV_DRM_DEADLINE_SLOT_SETUP,
+    /* Timer and fence callback armed; waits for the deadline work */
+    NV_DRM_DEADLINE_SLOT_ARMED,
+    /* Being checked and released by the deadline work */
+    NV_DRM_DEADLINE_SLOT_BUSY,
+};
+
+/* A tracked fence deadline. Protected by nv_drm_device::deadline.lock. */
+struct nv_drm_deadline_slot {
+    struct nv_drm_device *nv_dev;
+    enum nv_drm_deadline_slot_state state;
+
+    /*
+     * References to the fence and its context, whose semaphore tells whether
+     * the GPU finished; set unless the slot is free
+     */
+    struct dma_fence *fence;
+    struct nv_drm_fence_context *fctx;
+    bool semsurf; /* fence is a semaphore surface fence, not a prime one */
+
+    ktime_t deadline;
+    ktime_t set_time; /* When the deadline was first set */
+
+    /* Both queue the deadline work: at the deadline and when it signals */
+    struct hrtimer timer;
+    struct dma_fence_cb cb;
+};
+#endif
 
 struct nv_drm_device {
     nv_gpu_info_t gpu_info;
@@ -210,6 +254,38 @@ struct nv_drm_device {
 
     struct mutex drm_lut_surface_pool_mutex;
     struct list_head drm_lut_surface_pool;
+
+#if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
+    /*
+     * Fence deadline tracking, used to boost GPU clocks when a fence that a
+     * waiter (e.g. a compositor's page flip) needs by some deadline is
+     * about to miss it. See nvidia-drm-fence.c.
+     */
+    struct {
+        /* Protects enabled and the slots */
+        spinlock_t lock;
+        bool enabled;
+
+        struct nv_drm_deadline_slot slots[NV_DRM_DEADLINE_SLOTS];
+
+        /* Checks deadlines that are due or whose fences signaled */
+        struct work_struct work;
+        /* Requests the boost, which may block for tens of milliseconds */
+        struct work_struct boost_work;
+
+        /* Only touched by work: last boost request and recent misses */
+        unsigned long last_boost;
+        /* Only touched by work: last trigger and current wait between boosts */
+        unsigned long last_trigger;
+        unsigned int boost_interval_ms;
+        unsigned long miss_window_start;
+        unsigned int miss_count;
+
+        /* Only touched by work: recent tight frames */
+        ktime_t tight_window_start;
+        unsigned int tight_count;
+    } deadline;
+#endif
 };
 
 static inline NvU32 nv_drm_next_display_semaphore(
