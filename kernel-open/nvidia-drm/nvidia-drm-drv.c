@@ -1025,6 +1025,8 @@ static int nv_drm_dev_load(struct drm_device *dev)
 
     init_waitqueue_head(&nv_dev->flip_event_wq);
 
+    nv_drm_fence_deadline_init(nv_dev);
+
     mutex_unlock(&nv_dev->lock);
 
     return 0;
@@ -1067,6 +1069,7 @@ static void nv_drm_dev_unload(struct drm_device *dev)
     atomic_set(&nv_dev->enable_event_handling, false);
     cancel_delayed_work_sync(&nv_dev->hotplug_event_work);
     cancel_delayed_work_sync(&nv_dev->content_protection_event_work);
+    nv_drm_fence_deadline_fini(nv_dev);
 
     /* Clean up output polling */
 
