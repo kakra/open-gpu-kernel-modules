@@ -296,7 +296,7 @@ void nv_drm_handle_display_change(struct nv_drm_device *nv_dev,
 
     nv_drm_connector_mark_connection_status_dirty(nv_encoder->nv_connector);
 
-    schedule_delayed_work(&nv_dev->hotplug_event_work, 0);
+    queue_delayed_work(nv_drm_percpu_wq, &nv_dev->hotplug_event_work, 0);
 }
 
 void nv_drm_handle_display_cp_change(struct nv_drm_device *nv_dev,
@@ -320,7 +320,7 @@ void nv_drm_handle_display_cp_change(struct nv_drm_device *nv_dev,
     nv_encoder->nv_connector->cp = cp;
     nv_encoder->nv_connector->cp_event_pending = true;
     mutex_unlock(&dev->mode_config.mutex);
-    schedule_delayed_work(&nv_dev->content_protection_event_work, 0);
+    queue_delayed_work(nv_drm_percpu_wq, &nv_dev->content_protection_event_work, 0);
 }
 
 void nv_drm_handle_display_cp_topology_change(struct nv_drm_device *nv_dev,
@@ -376,6 +376,6 @@ void nv_drm_handle_dynamic_display_connected(struct nv_drm_device *nv_dev,
         return;
     }
 
-    schedule_delayed_work(&nv_dev->hotplug_event_work, 0);
+    queue_delayed_work(nv_drm_percpu_wq, &nv_dev->hotplug_event_work, 0);
 }
 #endif
