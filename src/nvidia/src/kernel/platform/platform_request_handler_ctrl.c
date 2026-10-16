@@ -2115,7 +2115,15 @@ _pfmreqhndlrUpdatePpmdLimit
         &counterVal);
     if (status != NV_OK)
     {
-        NV_ASSERT_OK_FAILED("PlatformRequestHandler failed to get platform power mode from SBIOS", status);
+        //
+        // NV_ERR_INVALID_DATA: the SBIOS advertises the limit but isn't
+        // providing it right now, which the spec allows (see
+        // pfmreqhndlrGetPerfSensorCounterById); not worth an assert.
+        //
+        if (status != NV_ERR_INVALID_DATA)
+        {
+            NV_ASSERT_OK_FAILED("PlatformRequestHandler failed to get platform power mode from SBIOS", status);
+        }
         goto _pfmreqhndlrUpdatePpmdLimit_exit;
     }
 
@@ -2172,7 +2180,11 @@ _pfmreqhndlrUpdateTgpuLimit
 
     if (status != NV_OK)
     {
-        NV_ASSERT_OK_FAILED("PlatformRequestHandler failed to get target temp from SBIOS", status);
+        // See _pfmreqhndlrUpdatePpmdLimit()
+        if (status != NV_ERR_INVALID_DATA)
+        {
+            NV_ASSERT_OK_FAILED("PlatformRequestHandler failed to get target temp from SBIOS", status);
+        }
         return status;
     }
 
