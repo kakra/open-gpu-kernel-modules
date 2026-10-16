@@ -2386,9 +2386,18 @@ static const struct drm_plane_helper_funcs nv_plane_helper_funcs = {
     .atomic_check   = nv_drm_plane_atomic_check,
 };
 
+#if defined(NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP)
+static void nv_drm_crtc_pending_flip_events_work(struct work_struct *work);
+#endif
+
 static void nv_drm_crtc_destroy(struct drm_crtc *crtc)
 {
     struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
+
+#if defined(NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP)
+    cancel_delayed_work_sync(&nv_crtc->pending_flip_events_work);
+    nv_drm_crtc_pending_flip_events_work(&nv_crtc->pending_flip_events_work.work);
+#endif
 
     drm_crtc_cleanup(crtc);
 
@@ -3207,12 +3216,376 @@ failed:
     return ERR_PTR(ret);
 }
 
+#if defined(NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP)
+/*
+ * Flip events and vblank callbacks.
+ *
+ * NVKMS delivers flip-occurred events (from the display channel's completion
+ * notifier) and vblank callbacks (from the RG semaphore interrupt) through
+ * independent deferred work. A flip's event can therefore be processed before
+ * the callback for the vblank the flip happened at, or after later vblanks,
+ * so the DRM core's "current" vblank count and timestamp don't necessarily
+ * belong to the flip.
+ *
+ * Instead, keep a short history of handled vblanks and report each flip at
+ * the first vblank that started after the flip was submitted to NVKMS. If
+ * that vblank hasn't been handled yet, hold the event until it is.
+ *
+ * Flips that may happen later than that are left without a submit time and
+ * reported at the current vblank like before: tearing flips, flips waiting
+ * on an unsignaled acquire fence, and flips with VRR enabled (see
+ * nv_drm_crtc_set_vblank_duration()).
+ */
+
+#define NV_DRM_PENDING_FLIP_EVENTS_TIMEOUT_MS 50
+
+static void __nv_drm_crtc_send_flip_event_at(struct drm_crtc *crtc,
+                                             struct drm_pending_vblank_event *e,
+                                             u64 count, NvU64 time)
+{
+    struct timespec64 tv = ktime_to_timespec64(ns_to_ktime(time));
+
+    e->pipe = drm_crtc_index(crtc);
+    e->event.vbl.sequence = count;
+    e->event.vbl.tv_sec = tv.tv_sec;
+    e->event.vbl.tv_usec = tv.tv_nsec / 1000;
+
+    drm_send_event_locked(crtc->dev, &e->base);
+}
+
+/*
+ * Send the events of nv_flip and the flips deferred to it as having happened
+ * at the given vblank, and free the deferred flips. Called with
+ * dev->event_lock held.
+ */
+static void __nv_drm_crtc_send_flip_events_at(struct nv_drm_crtc *nv_crtc,
+                                              struct nv_drm_flip *nv_flip,
+                                              u64 count, NvU64 time)
+{
+    struct nv_drm_flip *nv_deferred_flip, *nv_next_deferred_flip;
+
+    if (nv_flip->event != NULL) {
+        __nv_drm_crtc_send_flip_event_at(&nv_crtc->base, nv_flip->event,
+                                         count, time);
+        nv_flip->event = NULL;
+        drm_crtc_vblank_put(&nv_crtc->base);
+    }
+
+    list_for_each_entry_safe(nv_deferred_flip, nv_next_deferred_flip,
+                             &nv_flip->deferred_flip_list, list_entry) {
+        if (nv_deferred_flip->event != NULL) {
+            __nv_drm_crtc_send_flip_event_at(&nv_crtc->base,
+                                             nv_deferred_flip->event,
+                                             count, time);
+            drm_crtc_vblank_put(&nv_crtc->base);
+        }
+        list_del(&nv_deferred_flip->list_entry);
+        nv_drm_free(nv_deferred_flip);
+    }
+}
+
+/*
+ * Find the handled vblank a flip submitted at submit_time happened at, i.e.
+ * the first one that started after submit_time. Returns false if it hasn't
+ * been handled yet. Called with dev->vblank_time_lock held, and only with a
+ * non-empty history.
+ */
+static bool __nv_drm_crtc_find_flip_vblank(const struct nv_drm_crtc *nv_crtc,
+                                           NvU64 submit_time,
+                                           u64 *count, NvU64 *time)
+{
+    const unsigned int len = nv_crtc->vblank_history_len;
+    const unsigned int first =
+        (nv_crtc->vblank_history_next + NV_DRM_VBLANK_HISTORY - len) %
+        NV_DRM_VBLANK_HISTORY;
+    unsigned int i;
+
+    for (i = 0; i < len; i++) {
+        const unsigned int idx = (first + i) % NV_DRM_VBLANK_HISTORY;
+        const NvU64 vblank_start = nv_crtc->vblank_history[idx].time -
+                                   nv_crtc->vblank_duration_ns;
+
+        /*
+         * If even the oldest remembered vblank started after the flip was
+         * submitted, the flip happened at it or an older one that has
+         * dropped out of the history; the oldest is the best estimate.
+         */
+        if (vblank_start >= submit_time) {
+            *count = nv_crtc->vblank_history[idx].count;
+            *time = nv_crtc->vblank_history[idx].time;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/*
+ * Send the events of pending flips whose vblank has been handled, or of all
+ * pending flips if 'all' (using the latest vblank, or the current time if
+ * none). Called with dev->event_lock held.
+ */
+static void __nv_drm_crtc_process_pending_flip_events(struct nv_drm_crtc *nv_crtc,
+                                                      bool all)
+{
+    struct drm_device *dev = nv_crtc->base.dev;
+    struct nv_drm_flip *nv_flip, *nv_next_flip;
+
+    list_for_each_entry_safe(nv_flip, nv_next_flip,
+                             &nv_crtc->pending_flip_events, list_entry) {
+        unsigned long irqflags;
+        bool found = false;
+        u64 count = 0;
+        NvU64 time = 0;
+
+        spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
+        if (nv_crtc->vblank_history_len > 0) {
+            found = __nv_drm_crtc_find_flip_vblank(nv_crtc,
+                                                   nv_flip->submit_time,
+                                                   &count, &time);
+            if (!found && all) {
+                const unsigned int last =
+                    (nv_crtc->vblank_history_next + NV_DRM_VBLANK_HISTORY - 1) %
+                    NV_DRM_VBLANK_HISTORY;
+                count = nv_crtc->vblank_history[last].count;
+                time = nv_crtc->vblank_history[last].time;
+                found = true;
+            }
+        } else if (all) {
+            count = drm_crtc_vblank_count(&nv_crtc->base);
+            time = ktime_get_ns();
+            found = true;
+        }
+        spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
+
+        if (!found) {
+            /* Pending flips are in submission order */
+            break;
+        }
+
+        list_del(&nv_flip->list_entry);
+        __nv_drm_crtc_send_flip_events_at(nv_crtc, nv_flip, count, time);
+        nv_drm_free(nv_flip);
+    }
+}
+
+/*
+ * Called with dev->event_lock held, after nv_flip has been dequeued from the
+ * flip list. Returns false if the caller should send the flip's events
+ * itself (e.g. vblank interrupts aren't running, or the flip isn't tied to
+ * the first vblank after its submission). Otherwise the events were sent, or
+ * ownership of nv_flip was taken and *pp_nv_flip set to NULL, to send them
+ * once the vblank the flip happened at has been handled.
+ */
+bool nv_drm_crtc_handle_flip_events(struct nv_drm_crtc *nv_crtc,
+                                    struct nv_drm_flip **pp_nv_flip)
+{
+    struct drm_device *dev = nv_crtc->base.dev;
+    struct nv_drm_flip *nv_flip = *pp_nv_flip;
+    unsigned long irqflags;
+    bool usable, found = false;
+    u64 count = 0;
+    NvU64 time = 0;
+
+    if (!nv_drm_vblank_module_param) {
+        return false;
+    }
+
+    spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
+    usable = nv_crtc->vblank_intr_fired &&
+             nv_crtc->vblank_history_len > 0 &&
+             nv_crtc->vblank_duration_ns != 0 &&
+             READ_ONCE(nv_flip->submit_time) != 0;
+    if (usable) {
+        found = __nv_drm_crtc_find_flip_vblank(nv_crtc,
+                                               READ_ONCE(nv_flip->submit_time),
+                                               &count, &time);
+    }
+    spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
+
+    if (!usable) {
+        /*
+         * The caller sends this flip's events right away; send those of
+         * earlier flips that are still waiting first.
+         */
+        __nv_drm_crtc_process_pending_flip_events(nv_crtc, true /* all */);
+        return false;
+    }
+
+    /* Events must not overtake those of earlier flips that are waiting */
+    if (found && list_empty(&nv_crtc->pending_flip_events)) {
+        __nv_drm_crtc_send_flip_events_at(nv_crtc, nv_flip, count, time);
+        return true;
+    }
+
+    list_add_tail(&nv_flip->list_entry, &nv_crtc->pending_flip_events);
+    *pp_nv_flip = NULL;
+
+    mod_delayed_work(system_wq, &nv_crtc->pending_flip_events_work,
+                     msecs_to_jiffies(NV_DRM_PENDING_FLIP_EVENTS_TIMEOUT_MS));
+
+    return true;
+}
+
+/*
+ * Whether flip events are waiting for their vblank. Called with
+ * dev->event_lock held.
+ */
+bool nv_drm_crtc_has_pending_flip_events(struct nv_drm_crtc *nv_crtc)
+{
+    return !list_empty(&nv_crtc->pending_flip_events);
+}
+
+/*
+ * For a flip without a hardware flip event: if flip events are waiting for
+ * their vblank, defer nv_flip to the last of them so its event isn't sent
+ * ahead of theirs, and return true. Called with dev->event_lock held.
+ */
+bool nv_drm_crtc_defer_flip_to_pending(struct nv_drm_crtc *nv_crtc,
+                                       struct nv_drm_flip *nv_flip)
+{
+    struct nv_drm_flip *nv_last_flip;
+
+    if (list_empty(&nv_crtc->pending_flip_events)) {
+        return false;
+    }
+
+    nv_last_flip = list_last_entry(&nv_crtc->pending_flip_events,
+                                   struct nv_drm_flip, list_entry);
+
+    /* Dropped when the deferred flip's event is sent */
+    if (nv_drm_vblank_module_param && nv_flip->event != NULL) {
+        drm_crtc_vblank_get(&nv_crtc->base);
+    }
+
+    list_add_tail(&nv_flip->list_entry, &nv_last_flip->deferred_flip_list);
+
+    return true;
+}
+
+static void nv_drm_crtc_pending_flip_events_work(struct work_struct *work)
+{
+    struct nv_drm_crtc *nv_crtc =
+        container_of(to_delayed_work(work), struct nv_drm_crtc,
+                     pending_flip_events_work);
+    struct drm_device *dev = nv_crtc->base.dev;
+    unsigned long irqflags;
+
+    spin_lock_irqsave(&dev->event_lock, irqflags);
+    __nv_drm_crtc_process_pending_flip_events(nv_crtc, true /* all */);
+    spin_unlock_irqrestore(&dev->event_lock, irqflags);
+}
+
+/*
+ * Record a handled vblank and send the flip events that were waiting for it.
+ */
+static void __nv_drm_crtc_vblank_handled(struct nv_drm_crtc *nv_crtc,
+                                         NvU64 time)
+{
+    struct drm_device *dev = nv_crtc->base.dev;
+    unsigned long irqflags;
+
+    spin_lock_irqsave(&dev->event_lock, irqflags);
+
+    spin_lock(&dev->vblank_time_lock);
+    nv_crtc->vblank_history[nv_crtc->vblank_history_next].time = time;
+    nv_crtc->vblank_history[nv_crtc->vblank_history_next].count =
+        drm_crtc_vblank_count(&nv_crtc->base);
+    nv_crtc->vblank_history_next =
+        (nv_crtc->vblank_history_next + 1) % NV_DRM_VBLANK_HISTORY;
+    if (nv_crtc->vblank_history_len < NV_DRM_VBLANK_HISTORY) {
+        nv_crtc->vblank_history_len++;
+    }
+    spin_unlock(&dev->vblank_time_lock);
+
+    if (!list_empty(&nv_crtc->pending_flip_events)) {
+        __nv_drm_crtc_process_pending_flip_events(nv_crtc, false);
+    }
+
+    spin_unlock_irqrestore(&dev->event_lock, irqflags);
+}
+
+/* Forget handled vblanks, e.g. when vblank interrupts stop. */
+static void __nv_drm_crtc_reset_vblank_history(struct nv_drm_crtc *nv_crtc)
+{
+    nv_crtc->vblank_history_len = 0;
+    nv_crtc->vblank_history_next = 0;
+}
+
+void nv_drm_crtc_set_vblank_duration(struct nv_drm_crtc *nv_crtc,
+                                     const struct drm_crtc_state *crtc_state)
+{
+    struct drm_device *dev = nv_crtc->base.dev;
+    const struct drm_display_mode *mode = &crtc_state->adjusted_mode;
+    unsigned long irqflags;
+    NvU64 duration = 0;
+
+    if (mode->clock > 0 && mode->vtotal > mode->vdisplay) {
+        /* mode->clock is in kHz */
+        duration = div_u64((u64)(mode->vtotal - mode->vdisplay) *
+                           mode->htotal * 1000000ULL, mode->clock);
+    }
+
+#if defined(NV_DRM_CRTC_STATE_HAS_VRR_ENABLED)
+    /*
+     * With VRR the blanking interval stretches until a flip arrives, so the
+     * mode's vblank length doesn't tell when the vblank a flip ended started.
+     * A zero duration makes flip events use the current vblank instead.
+     */
+    if (crtc_state->vrr_enabled) {
+        duration = 0;
+    }
+#endif
+
+    spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
+    nv_crtc->vblank_duration_ns = duration;
+    spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
+}
+
+#else
+
+bool nv_drm_crtc_handle_flip_events(struct nv_drm_crtc *nv_crtc,
+                                    struct nv_drm_flip **pp_nv_flip)
+{
+    return false;
+}
+
+bool nv_drm_crtc_has_pending_flip_events(struct nv_drm_crtc *nv_crtc)
+{
+    return false;
+}
+
+bool nv_drm_crtc_defer_flip_to_pending(struct nv_drm_crtc *nv_crtc,
+                                       struct nv_drm_flip *nv_flip)
+{
+    return false;
+}
+
+void nv_drm_crtc_set_vblank_duration(struct nv_drm_crtc *nv_crtc,
+                                     const struct drm_crtc_state *crtc_state)
+{
+}
+
+#endif /* NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP */
+
 static void nv_drm_crtc_vblank_callback(NvU64 param1, NvU64 param2)
 {
     struct nv_drm_crtc *nv_crtc = (void*)(NvUPtr)param1;
     struct drm_crtc *crtc = &nv_crtc->base;
     struct drm_device *dev = crtc->dev;
     unsigned long irqflags;
+    bool handled;
+
+    /*
+     * NVKMS converts the hardware timestamp to CPU time using RM's GPU-CPU
+     * time correlation, whose CPU side is CLOCK_MONOTONIC_RAW, while DRM
+     * vblank timestamps are CLOCK_MONOTONIC. The two drift apart as NTP
+     * adjusts the clock (by hundreds of milliseconds shortly after boot), so
+     * convert using their current offset, which changes only slowly.
+     */
+    if (param2 != 0) {
+        param2 += ktime_get_ns() - ktime_get_raw_ns();
+    }
 
     spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
 
@@ -3223,12 +3596,18 @@ static void nv_drm_crtc_vblank_callback(NvU64 param1, NvU64 param2)
 
     spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
 
-    drm_handle_vblank(crtc->dev, drm_crtc_index(crtc));
+    handled = drm_handle_vblank(crtc->dev, drm_crtc_index(crtc));
 
     spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
     /* Mark that a vblank interrupt has fired */
     nv_crtc->vblank_intr_fired = true;
     spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
+
+#if defined(NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP)
+    if (handled && param2 != 0) {
+        __nv_drm_crtc_vblank_handled(nv_crtc, param2);
+    }
+#endif
 }
 
 static void nv_drm_vblank_enable_fn(void *t)
@@ -3244,6 +3623,7 @@ static void nv_drm_vblank_enable_fn(void *t)
     spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
 #if defined(NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP)
     nv_crtc->last_vblank_time = 0;
+    __nv_drm_crtc_reset_vblank_history(nv_crtc);
 #endif
     nv_crtc->vblank_intr_fired = false;
     spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
@@ -3280,6 +3660,17 @@ static void nv_drm_vblank_disable_fn(void *t)
     nv_crtc->vblank_intr_fired = false;
     spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
 
+#if defined(NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP)
+    /* No more vblank callbacks; don't leave flip events waiting for one */
+    spin_lock_irqsave(&dev->event_lock, irqflags);
+    __nv_drm_crtc_process_pending_flip_events(nv_crtc, true /* all */);
+    spin_unlock_irqrestore(&dev->event_lock, irqflags);
+
+    spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
+    __nv_drm_crtc_reset_vblank_history(nv_crtc);
+    spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
+#endif
+
     mutex_unlock(&nv_crtc->vblank_q_lock);
 }
 
@@ -3311,6 +3702,9 @@ static struct drm_crtc *__nv_drm_crtc_create(struct nv_drm_device *nv_dev,
     nv_crtc->head = head;
 #if defined(NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP)
     nv_crtc->last_vblank_time = 0;
+    INIT_LIST_HEAD(&nv_crtc->pending_flip_events);
+    INIT_DELAYED_WORK(&nv_crtc->pending_flip_events_work,
+                      nv_drm_crtc_pending_flip_events_work);
 #endif
     INIT_LIST_HEAD(&nv_crtc->flip_list);
     spin_lock_init(&nv_crtc->flip_list_lock);
