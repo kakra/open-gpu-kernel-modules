@@ -213,7 +213,7 @@ static bool __nv_drm_deadline_request_boost(struct nv_drm_device *nv_dev)
         min(nv_dev->deadline.boost_interval_ms * 2,
             (unsigned int)NV_DRM_DEADLINE_BACKOFF_MAX_MS);
 
-    queue_work(system_unbound_wq, &nv_dev->deadline.boost_work);
+    queue_work(nv_drm_dfl_wq, &nv_dev->deadline.boost_work);
 
     return true;
 }

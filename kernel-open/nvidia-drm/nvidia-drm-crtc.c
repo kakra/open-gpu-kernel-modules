@@ -3421,7 +3421,7 @@ bool nv_drm_crtc_handle_flip_events(struct nv_drm_crtc *nv_crtc,
     list_add_tail(&nv_flip->list_entry, &nv_crtc->pending_flip_events);
     *pp_nv_flip = NULL;
 
-    mod_delayed_work(system_wq, &nv_crtc->pending_flip_events_work,
+    mod_delayed_work(nv_drm_percpu_wq, &nv_crtc->pending_flip_events_work,
                      msecs_to_jiffies(NV_DRM_PENDING_FLIP_EVENTS_TIMEOUT_MS));
 
     return true;
