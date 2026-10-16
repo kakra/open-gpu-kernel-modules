@@ -54,6 +54,7 @@
 #include <ctrl/ctrl2080/ctrl2080gpu.h> /* NV2080_CTRL_CMD_GPU_GET_INFO_V2 */
 #include <ctrl/ctrl2080/ctrl2080fb.h> /* NV2080_CTRL_CMD_FB_GET_SEMAPHORE_SURFACE_LAYOUT */
 #include <ctrl/ctrl2080/ctrl2080unix.h> /* NV2080_CTRL_CMD_OS_UNIX_GC6_BLOCKER_REFCNT */
+#include <ctrl/ctrl2080/ctrl2080perf.h> /* NV2080_CTRL_CMD_PERF_BOOST */
 
 #include "ctrl/ctrl003e.h" /* NV003E_CTRL_CMD_GET_SURFACE_PHYS_PAGES */
 #include "ctrl/ctrl0041.h" /* NV0041_CTRL_SURFACE_INFO */
@@ -143,8 +144,22 @@ static NvU32 EnumerateGpus(void (*gpuCallback)(const struct NvKmsKapiGpuInfo *in
 /*
  * Helper function to free RM objects allocated for NvKmsKapiDevice.
  */
+static void RmFreePerfClient(struct NvKmsKapiDevice *device)
+{
+    /* Freeing the client frees its device and subdevice */
+    if (device->hRmPerfClient != 0x0) {
+        nvRmApiFree(device->hRmPerfClient,
+                    device->hRmPerfClient,
+                    device->hRmPerfClient);
+        device->hRmPerfClient = 0x0;
+    }
+    device->hRmPerfSubDevice = 0x0;
+}
+
 static void RmFreeDevice(struct NvKmsKapiDevice *device)
 {
+    RmFreePerfClient(device);
+
     if (device->smgGpuInstSubscriptionHdl != 0x0) {
         nvKmsKapiFreeRmHandle(device, device->smgGpuInstSubscriptionHdl);
         device->smgGpuInstSubscriptionHdl = 0x0;
@@ -204,6 +219,62 @@ static NvU32 NvKmsKapiRMAlloc(nvRMContextPtr rmctx, NvU32 client, NvHandle paren
 static NvU32 NvKmsKapiRMFree(nvRMContextPtr rmctx, NvU32 client, NvHandle parent, NvHandle object)
 {
     return nvRmApiFree(client, parent, object);
+}
+
+/*
+ * Allocate the RM client, device and subdevice used for perfBoost(). Failure
+ * isn't fatal: perfBoost() falls back to the main client.
+ */
+#define NVKMS_KAPI_PERF_RM_DEVICE_HANDLE    0xcafe0001
+#define NVKMS_KAPI_PERF_RM_SUBDEVICE_HANDLE 0xcafe0002
+
+static void RmAllocatePerfClient(struct NvKmsKapiDevice *device)
+{
+    NV0080_ALLOC_PARAMETERS allocParams = { };
+    NV2080_ALLOC_PARAMETERS subdevAllocParams = { 0 };
+    NvU32 ret;
+
+    ret = nvRmApiAlloc(NV01_NULL_OBJECT,
+                       NV01_NULL_OBJECT,
+                       NV01_NULL_OBJECT,
+                       NV01_ROOT,
+                       &device->hRmPerfClient);
+
+    if (ret != NVOS_STATUS_SUCCESS || device->hRmPerfClient == 0x0) {
+        device->hRmPerfClient = 0x0;
+        goto failed;
+    }
+
+    allocParams.deviceId = device->deviceInstance;
+    allocParams.hClientShare = device->hRmPerfClient;
+
+    ret = nvRmApiAlloc(device->hRmPerfClient,
+                       device->hRmPerfClient,
+                       NVKMS_KAPI_PERF_RM_DEVICE_HANDLE,
+                       NV01_DEVICE_0,
+                       &allocParams);
+    if (ret != NVOS_STATUS_SUCCESS) {
+        goto failed;
+    }
+
+    subdevAllocParams.subDeviceId = 0;
+
+    ret = nvRmApiAlloc(device->hRmPerfClient,
+                       NVKMS_KAPI_PERF_RM_DEVICE_HANDLE,
+                       NVKMS_KAPI_PERF_RM_SUBDEVICE_HANDLE,
+                       NV20_SUBDEVICE_0,
+                       &subdevAllocParams);
+    if (ret != NVOS_STATUS_SUCCESS) {
+        goto failed;
+    }
+
+    device->hRmPerfSubDevice = NVKMS_KAPI_PERF_RM_SUBDEVICE_HANDLE;
+    return;
+
+failed:
+    nvKmsKapiLogDeviceDebug(device,
+        "Failed to allocate the perf boost RM client, using the main client");
+    RmFreePerfClient(device);
 }
 
 /*
@@ -322,6 +393,10 @@ static NvBool RmAllocateDevice(struct NvKmsKapiDevice *device)
     }
 
     device->hRmSubDevice = hRmSubDevice;
+
+    if (!device->isSOC) {
+        RmAllocatePerfClient(device);
+    }
 
     /* Determine if GPU has coherent link */
 
@@ -2061,6 +2136,38 @@ static NvBool RmGc6BlockerRefCntDec(const struct NvKmsKapiDevice *device)
     return RmGc6BlockerRefCntAction(
         device,
         NV2080_CTRL_OS_UNIX_GC6_BLOCKER_REFCNT_DEC);
+}
+
+static NvBool RmPerfBoost(const struct NvKmsKapiDevice *device,
+                          NvU32 durationSec)
+{
+    NV_STATUS status;
+    NV2080_CTRL_PERF_BOOST_PARAMS params = { 0 };
+
+    /*
+     * ASYNC: return once the limit is queued instead of waiting ~30 ms (under
+     * the RM GPU lock) for the PMU clock change; the clocks change just as fast.
+     */
+    params.flags = DRF_DEF(2080, _CTRL_PERF_BOOST_FLAGS, _CMD, _BOOST_TO_MAX) |
+                   DRF_DEF(2080, _CTRL_PERF_BOOST_FLAGS, _ASYNC, _YES);
+    params.duration = durationSec;
+
+    status = nvRmApiControl(device->hRmPerfClient != 0x0 ?
+                                device->hRmPerfClient : device->hRmClient,
+                            device->hRmPerfClient != 0x0 ?
+                                device->hRmPerfSubDevice : device->hRmSubDevice,
+                            NV2080_CTRL_CMD_PERF_BOOST,
+                            &params,
+                            sizeof(params));
+    if (status != NV_OK) {
+        nvKmsKapiLogDeviceDebug(
+            device,
+            "Failed to boost GPU performance for 0x%x, status: 0x%x",
+            device->hRmSubDevice, status);
+        return NV_FALSE;
+    }
+
+    return NV_TRUE;
 }
 
 static NvBool GetMemoryPages
@@ -4215,6 +4322,8 @@ NvBool nvKmsKapiGetFunctionsTableInternal
 
     funcsTable->registerVblankIntrCallback = RegisterVblankIntrCallback;
     funcsTable->unregisterVblankIntrCallback = UnregisterVblankIntrCallback;
+
+    funcsTable->perfBoost = RmPerfBoost;
 
     return NV_TRUE;
 }
