@@ -34,6 +34,9 @@ void nvCtxDmaFreeSyncptHandle(NVDevEvoRec *pDevEvo, NVEvoSyncpt *pSyncpt);
 
 NvU32 nvCtxDmaBind(NVDevEvoPtr pDevEvo, NVEvoChannelPtr pChannel, NvU32 hCtxDma);
 
+void nvCtxDmaBindOnUse(const NVDevEvoRec *pDevEvo, NVEvoChannelPtr pChannel,
+                       const NVSurfaceDescriptor *pSurfaceDesc);
+
 void nvCtxDmaFree(NVDevEvoPtr pDevEvo, NvU32 deviceHandle, NvU32 *hDispCtxDma);
 
 NvU32 nvCtxDmaAlloc(NVDevEvoPtr pDevEvo, NvU32 *pCtxDmaHandle,
