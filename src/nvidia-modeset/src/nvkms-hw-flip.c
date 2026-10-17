@@ -3149,7 +3149,7 @@ void nvPostFlip(NVDevEvoRec *pDevEvo,
 static NvBool AllocPreSyncpt(NVDevEvoRec *pDevEvo,
                              NVEvoChannel *pChannel, const NvU32 id)
 {
-    NVSurfaceDescriptor surfaceDesc;
+    NVSurfaceDescriptor surfaceDesc = { };
 
     /*! use id value to check the global table */
     if (!pDevEvo->preSyncptTable[id].allocated) {

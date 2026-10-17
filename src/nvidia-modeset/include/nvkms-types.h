@@ -190,6 +190,14 @@ typedef struct _NVSurfaceDescriptor
     NvU64 memOffset;
     NvBool bValid;
     NvBool isMemoryMappedForDisplayAccess;
+    /*
+     * If lazyBind is set, the descriptor is bound to the core channel only and
+     * gets bound to a window channel the first time that channel's methods
+     * reference it (nvCtxDmaBindOnUse()). lazyBoundChannelMask (an
+     * NVEvoChannelMask) holds the window channels it is bound to.
+     */
+    NvBool lazyBind;
+    NvU64 lazyBoundChannelMask;
 } NVSurfaceDescriptor;
 
 typedef struct _NVEvoDma

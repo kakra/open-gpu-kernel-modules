@@ -177,6 +177,41 @@ retryOnce:
     return ret;
 }
 
+/*!
+ * Bind a lazily bound surface descriptor (see
+ * nvRmAllocAndBindSurfaceDescriptor()) to pChannel before a method of that
+ * channel references it. Called by the HAL functions that program a surface
+ * descriptor into a window channel; the bind has to complete before the
+ * channel is kicked off.
+ */
+void nvCtxDmaBindOnUse(const NVDevEvoRec *pConstDevEvo,
+                       NVEvoChannelPtr pChannel,
+                       const NVSurfaceDescriptor *pConstSurfaceDesc)
+{
+    /* The HAL functions get const pointers; neither object is const. */
+    NVDevEvoPtr pDevEvo = (NVDevEvoPtr)pConstDevEvo;
+    NVSurfaceDescriptor *pSurfaceDesc = (NVSurfaceDescriptor *)pConstSurfaceDesc;
+    NvU32 ret;
+
+    if ((pSurfaceDesc == NULL) || !pSurfaceDesc->lazyBind ||
+        (pSurfaceDesc->ctxDmaHandle == 0)) {
+        return;
+    }
+    if ((pSurfaceDesc->lazyBoundChannelMask & pChannel->channelMask) != 0) {
+        return;
+    }
+
+    ret = pDevEvo->hal->BindSurfaceDescriptor(pDevEvo, pChannel, pSurfaceDesc);
+    if (ret != NVOS_STATUS_SUCCESS) {
+        nvEvoLogDev(pDevEvo, EVO_LOG_ERROR,
+                    "Failed to bind surface descriptor 0x%08x to display channel 0x%llx: 0x%x",
+                    pSurfaceDesc->ctxDmaHandle,
+                    (unsigned long long)pChannel->channelMask, ret);
+        return;
+    }
+    pSurfaceDesc->lazyBoundChannelMask |= pChannel->channelMask;
+}
+
 void nvCtxDmaFree(NVDevEvoPtr pDevEvo,
                   NvU32 deviceHandle,
                   NvU32 *hDispCtxDma)
