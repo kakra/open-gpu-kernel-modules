@@ -953,6 +953,8 @@ static void EvoSetTmoLutSurfaceAddressC5(
 {
     NvU32 ctxDmaHandle = pSurfaceDesc ? pSurfaceDesc->ctxDmaHandle : 0;
 
+    nvCtxDmaBindOnUse(pDevEvo, pChannel, pSurfaceDesc);
+
     nvDmaSetStartEvoMethod(pChannel, NVC57E_SET_CONTEXT_DMA_TMO_LUT, 1);
     nvDmaSetEvoMethodData(pChannel,
         DRF_NUM(C57E, _SET_CONTEXT_DMA_TMO_LUT, _HANDLE, ctxDmaHandle));
@@ -3487,6 +3489,8 @@ EvoProgramSemaphore3(NVDevEvoPtr pDevEvo,
         /* XXX nvdisplay: enforce this at a higher level */
         nvAssert((pNIso->offsetInWords % 4) == 0);
 
+        nvCtxDmaBindOnUse(pDevEvo, pChannel,
+                          &pNIso->pSurfaceEvo->planes[0].surfaceDesc);
         nvDmaSetStartEvoMethod(pChannel, NVC37E_SET_CONTEXT_DMA_SEMAPHORE, 1);
         nvDmaSetEvoMethodData(pChannel, pNIso->pSurfaceEvo->planes[0].surfaceDesc.ctxDmaHandle);
 
@@ -3513,6 +3517,8 @@ static void EvoSetSemaphoreSurfaceAddressAndControlC6(
 {
     NvU32 ctxDmaHandle = pSurfaceDesc ? pSurfaceDesc->ctxDmaHandle : 0;
 
+    nvCtxDmaBindOnUse(pDevEvo, pChannel, pSurfaceDesc);
+
     /*! set ctx dma handle */
     nvDmaSetStartEvoMethod(pChannel, NVC67E_SET_CONTEXT_DMA_SEMAPHORE, 1);
     nvDmaSetEvoMethodData(pChannel,
@@ -3531,6 +3537,8 @@ static void EvoSetAcqSemaphoreSurfaceAddressAndControlC6(
     NvU32 ctrlVal)
 {
     NvU32 ctxDmaHandle = pSurfaceDesc ? pSurfaceDesc->ctxDmaHandle : 0;
+
+    nvCtxDmaBindOnUse(pDevEvo, pChannel, pSurfaceDesc);
 
     /*! set ctx dma handle */
     nvDmaSetStartEvoMethod(pChannel, NVC67E_SET_CONTEXT_DMA_ACQ_SEMAPHORE, 1);
@@ -3693,6 +3701,8 @@ static void EvoSetWinNotifierSurfaceAddressAndControlC3(
 {
     NvU32 ctxDmaHandle = pSurfaceDesc ? pSurfaceDesc->ctxDmaHandle : 0;
 
+    nvCtxDmaBindOnUse(pDevEvo, pChannel, pSurfaceDesc);
+
     nvDmaSetStartEvoMethod(pChannel, NVC37E_SET_CONTEXT_DMA_NOTIFIER, 1);
     nvDmaSetEvoMethodData(pChannel,
         DRF_NUM(C37E, _SET_CONTEXT_DMA_NOTIFIER, _HANDLE, ctxDmaHandle));
@@ -3711,6 +3721,8 @@ static void EvoSetISOSurfaceAddressC3(
     NvBool isBlocklinear)
 {
     NvU32 ctxDmaHandle = pSurfaceDesc ? pSurfaceDesc->ctxDmaHandle : 0;
+
+    nvCtxDmaBindOnUse(pDevEvo, pChannel, pSurfaceDesc);
 
     nvDmaSetStartEvoMethod(pChannel, NVC37E_SET_CONTEXT_DMA_ISO(ctxDmaIdx), 1);
     nvDmaSetEvoMethodData(pChannel, ctxDmaHandle);
@@ -4314,6 +4326,8 @@ static void EvoSetILUTSurfaceAddressC5(
     NvU32 offset)
 {
     NvU32 ctxDmaHandle = pSurfaceDesc ? pSurfaceDesc->ctxDmaHandle : 0;
+
+    nvCtxDmaBindOnUse(pDevEvo, pChannel, pSurfaceDesc);
 
     nvDmaSetStartEvoMethod(pChannel, NVC57E_SET_CONTEXT_DMA_ILUT, 1);
     nvDmaSetEvoMethodData(pChannel, DRF_NUM(C57E, _SET_CONTEXT_DMA_ILUT, _HANDLE, ctxDmaHandle));
