@@ -80,9 +80,20 @@ NvU32 EvoInterface::getRegkeyValue(const char *key)
 
     if (found) {
         return val;
-    } else {
-        return 0;
     }
+
+    //
+    // NVKMS registry keys only come from clients that pass them at device
+    // allocation (the X driver); nvidia-drm passes none. Without the SST EDID
+    // recovery fix, one corrupted EDID block (e.g. an eDP panel read right
+    // after resume) leaves the EDID marked as patched through every re-read,
+    // and the DP library reports its fallback EDID instead of the panel's.
+    //
+    if (nvkms_strcmp(key, "DP_ENABLE_SST_EDID_RECOVERY_FIX") == 0) {
+        return 1;
+    }
+
+    return 0;
 }
 
 bool EvoInterface::isInbandStereoSignalingSupported()
