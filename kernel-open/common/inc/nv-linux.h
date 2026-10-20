@@ -1327,6 +1327,9 @@ typedef struct nv_linux_state_s {
     NvU32 minor_num;
     struct nv_linux_state_s *next;
 
+    /* Link in nv_linux_removing_devices while removal waits for users */
+    struct nv_linux_state_s *next_removing;
+
     /* DRM private information */
     struct drm_device *drm;
 
