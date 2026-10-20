@@ -2685,10 +2685,26 @@ NvBool nvHdmiFrlQueryConfigOneColorFormatAndBpc(
                     pConfig->dscInfo.dscHBlankTriBytes;
                 pDscInfo->hdmi.dscTBlankToTTotalRatioX1k =
                     pConfig->dscInfo.dscTBlankToTTotalRatioX1k;
-                pDscInfo->hdmi.hblankMin =
-                    NV_UNSIGNED_DIV_CEIL(((pHwTimings->pixelClock * 1000) *
-                                              pConfig->dscInfo.dscHBlankTriBytes),
-                                         (hdmiLinkRate / 6));
+                {
+                    /*
+                     * hdmiLinkRate is per lane. FRL carries
+                     * lanes * laneRate * 16/18 (16b/18b coding) bits/s,
+                     * 24 bits per tri-byte. Compute in 64 bits: the
+                     * numerator overflows 32 bits for 4K high-refresh modes.
+                     */
+                    const NvU64 frlLanes =
+                        ((pConfig->frlRate == HDMI_FRL_DATA_RATE_3LANES_3GBPS) ||
+                         (pConfig->frlRate == HDMI_FRL_DATA_RATE_3LANES_6GBPS)) ?
+                            3 : 4;
+                    const NvU64 triBytesPerSec =
+                        (hdmiLinkRate * frlLanes * 16) / (18 * 24);
+                    const NvU64 hcBlankTimesPclk =
+                        (NvU64)pHwTimings->pixelClock * 1000 *
+                        pConfig->dscInfo.dscHBlankTriBytes;
+
+                    pDscInfo->hdmi.hblankMin = (NvU32)
+                        NV_UNSIGNED_DIV_CEIL(hcBlankTimesPclk, triBytesPerSec);
+                }
             } else {
                 pDscInfo->type = NV_DSC_INFO_EVO_TYPE_DISABLED;
             }
