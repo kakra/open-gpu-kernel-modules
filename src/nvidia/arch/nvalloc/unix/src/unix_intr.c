@@ -33,6 +33,7 @@
 #include "gpu/mmu/kern_gmmu.h"
 #include "gpu/disp/kern_disp.h"
 #include "gpu/disp/head/kernel_head.h"
+#include "kernel/gpu/gr/fecs_event_list.h"
 #include <nv_sriov_defines.h>
 
 #include "platform/sli/sli.h"
@@ -272,12 +273,38 @@ static NvBool osInterruptPending(
             if ((pIntr != NULL) && (INTERRUPT_TYPE_HARDWARE == intrGetIntrEn(pIntr)))
             {
                 NvBool bCtxswLog = NV_FALSE;
-                intrGetPendingNonStall_HAL(pGpu, pIntr, &intr1Pending, &threadState);
-                intrCheckFecsEventbufferPending(pGpu, pIntr, &intr1Pending, &bCtxswLog);
-                if (!bitVectorTestAllCleared(&intr1Pending))
+                KernelGraphicsManager *pKernelGraphicsManager = GPU_GET_KERNEL_GRAPHICS_MANAGER(pGpu);
+
+                if ((pKernelGraphicsManager == NULL) ||
+                    (fecsGetCtxswLogConsumerCount(pGpu, pKernelGraphicsManager) <= 0))
                 {
-                    intrServiceNonStall_HAL(pGpu, pIntr, &intr1Pending, &threadState);
-                    *serviced = NV_TRUE;
+                    //
+                    // intrServiceNonStall_HAL() reads the same TOP/leaf/enable
+                    // registers as intrGetPendingNonStall_HAL() and reports the
+                    // engines it serviced. Without ctxsw log consumers the pending
+                    // vector isn't needed before servicing, so skip the separate
+                    // scan (about five BAR0 reads per interrupt). Keep its GC6
+                    // check: no register access while the GPU is powered down.
+                    //
+                    bitVectorClrAll(&intr1Pending);
+                    if (!IS_GPU_GC6_STATE_ENTERED(pGpu))
+                    {
+                        intrServiceNonStall_HAL(pGpu, pIntr, &intr1Pending, &threadState);
+                        if (!bitVectorTestAllCleared(&intr1Pending))
+                        {
+                            *serviced = NV_TRUE;
+                        }
+                    }
+                }
+                else
+                {
+                    intrGetPendingNonStall_HAL(pGpu, pIntr, &intr1Pending, &threadState);
+                    intrCheckFecsEventbufferPending(pGpu, pIntr, &intr1Pending, &bCtxswLog);
+                    if (!bitVectorTestAllCleared(&intr1Pending))
+                    {
+                        intrServiceNonStall_HAL(pGpu, pIntr, &intr1Pending, &threadState);
+                        *serviced = NV_TRUE;
+                    }
                 }
 
                 //
