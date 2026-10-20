@@ -164,6 +164,17 @@ atomic_t num_probed_nv_devices = ATOMIC_INIT(0);
  *       are protected by nv_linux_devices_lock
  */
 nv_linux_state_t *nv_linux_devices;
+
+/*
+ * Devices whose PCI removal is waiting for their usage count to drop to zero.
+ * They are no longer on nv_linux_devices, so new users can't find them, but
+ * kernel clients (e.g. UVM) must still be able to drop the references they
+ * hold, or the removal waits forever.
+ *
+ * Protected by nv_linux_devices_lock.
+ */
+static nv_linux_state_t *nv_linux_removing_devices;
+
 static DECLARE_BITMAP(nv_linux_minor_bitmap, NV_MINOR_DEVICE_NUMBER_REGULAR_MAX + 1);
 
 // Global state for the control device
@@ -1291,6 +1302,58 @@ nv_linux_state_t *find_uuid(const NvU8 *uuid)
     }
 
 out:
+    UNLOCK_NV_LINUX_DEVICES();
+    return nvl;
+}
+
+/*
+ * Like find_gpu_id(), but also searches devices whose removal is waiting for
+ * their usage count to drop. Only for paths that release a reference taken
+ * earlier. If found, nvl is returned with nvl->ldata_lock taken.
+ */
+static nv_linux_state_t *find_gpu_id_for_release(NvU32 gpu_id)
+{
+    nv_linux_state_t *nvl = find_gpu_id(gpu_id);
+
+    if (nvl != NULL)
+        return nvl;
+
+    LOCK_NV_LINUX_DEVICES();
+
+    for (nvl = nv_linux_removing_devices; nvl; nvl = nvl->next_removing)
+    {
+        nv_state_t *nv = NV_STATE_PTR(nvl);
+        if (nv->gpu_id == gpu_id)
+        {
+            down(&nvl->ldata_lock);
+            break;
+        }
+    }
+
+    UNLOCK_NV_LINUX_DEVICES();
+    return nvl;
+}
+
+/* Like find_gpu_id_for_release(), but by UUID. */
+static nv_linux_state_t *find_uuid_for_release(const NvU8 *uuid)
+{
+    nv_linux_state_t *nvl = find_uuid(uuid);
+    const NvU8 *dev_uuid;
+
+    if (nvl != NULL)
+        return nvl;
+
+    LOCK_NV_LINUX_DEVICES();
+
+    for (nvl = nv_linux_removing_devices; nvl; nvl = nvl->next_removing)
+    {
+        down(&nvl->ldata_lock);
+        dev_uuid = nv_get_cached_uuid(NV_STATE_PTR(nvl));
+        if (dev_uuid && memcmp(dev_uuid, uuid, GPU_UUID_LEN) == 0)
+            break;
+        up(&nvl->ldata_lock);
+    }
+
     UNLOCK_NV_LINUX_DEVICES();
     return nvl;
 }
@@ -5508,7 +5571,7 @@ void nvidia_dev_put(NvU32 gpu_id, nvidia_stack_t *sp, NvBool reset_aware)
     nv_linux_state_t *nvl;
 
     /* Takes nvl->ldata_lock */
-    nvl = find_gpu_id(gpu_id);
+    nvl = find_gpu_id_for_release(gpu_id);
     if (!nvl)
         return;
 
@@ -5587,7 +5650,7 @@ void nvidia_dev_put_uuid(const NvU8 *uuid, nvidia_stack_t *sp)
     /* Callers must already have called nvidia_dev_get_uuid() */
 
     /* Takes nvl->ldata_lock */
-    nvl = find_uuid(uuid);
+    nvl = find_uuid_for_release(uuid);
     if (!nvl)
         return;
 
@@ -5629,7 +5692,7 @@ int nvidia_dev_unblock_gc6(const NvU8 *uuid, nvidia_stack_t *sp)
     /* Callers must already have called nvidia_dev_get_uuid() */
 
     /* Takes nvl->ldata_lock */
-    nvl = find_uuid(uuid);
+    nvl = find_uuid_for_release(uuid);
     if (!nvl)
         return -ENODEV;
 
@@ -5824,6 +5887,30 @@ void nv_linux_remove_device_locked(nv_linux_state_t *nvl)
         nv_linux_state_t *tnvl;
         for (tnvl = nv_linux_devices; tnvl->next != nvl;  tnvl = tnvl->next);
         tnvl->next = nvl->next;
+    }
+}
+
+/* caller should hold nv_linux_devices_lock using LOCK_NV_LINUX_DEVICES */
+void nv_linux_add_removing_device_locked(nv_linux_state_t *nvl)
+{
+    nvl->next_removing = nv_linux_removing_devices;
+    nv_linux_removing_devices = nvl;
+}
+
+/* caller should hold nv_linux_devices_lock using LOCK_NV_LINUX_DEVICES */
+void nv_linux_remove_removing_device_locked(nv_linux_state_t *nvl)
+{
+    nv_linux_state_t **pnvl;
+
+    for (pnvl = &nv_linux_removing_devices; *pnvl != NULL;
+         pnvl = &(*pnvl)->next_removing)
+    {
+        if (*pnvl == nvl)
+        {
+            *pnvl = nvl->next_removing;
+            nvl->next_removing = NULL;
+            return;
+        }
     }
 }
 

@@ -2821,6 +2821,8 @@ static void nv_pci_remove_helper(struct pci_dev *pci_dev, bool block_if_gpu_in_u
      */
     if ((atomic64_read(&nvl->usage_count) != 0) && !(nv->is_external_gpu))
     {
+        nv_linux_state_t *removing_nvl = nvl;
+
         nv_printf(NV_DBG_ERRORS,
                   "NVRM: Attempting to remove device %04x:%02x:%02x.%x with non-zero usage count!\n",
                   NV_PCI_DOMAIN_NUMBER(pci_dev), NV_PCI_BUS_NUMBER(pci_dev),
@@ -2829,7 +2831,14 @@ static void nv_pci_remove_helper(struct pci_dev *pci_dev, bool block_if_gpu_in_u
         /*
          * We can't return from this function without corrupting state, so we wait for
          * the usage count to go to zero.
+         *
+         * The device is no longer on nv_linux_devices. Keep it findable for
+         * the kernel-client release paths (nvidia_dev_put*(),
+         * nvidia_dev_unblock_gc6()), or the references they hold are never
+         * dropped and this loop never ends.
          */
+        nv_linux_add_removing_device_locked(nvl);
+
         while (atomic64_read(&nvl->usage_count) != 0)
         {
             /*
@@ -2852,11 +2861,14 @@ static void nv_pci_remove_helper(struct pci_dev *pci_dev, bool block_if_gpu_in_u
                           NV_PCI_DOMAIN_NUMBER(pci_dev), NV_PCI_BUS_NUMBER(pci_dev),
                           NV_PCI_SLOT_NUMBER(pci_dev), PCI_FUNC(pci_dev->devfn));
                 WARN_ON(1);
+                nv_linux_remove_removing_device_locked(removing_nvl);
                 goto done;
             }
             nv = NV_STATE_PTR(nvl);
             down(&nvl->ldata_lock);
         }
+
+        nv_linux_remove_removing_device_locked(removing_nvl);
 
         nv_printf(NV_DBG_ERRORS,
                   "NVRM: Continuing with GPU removal for device %04x:%02x:%02x.%x\n",
