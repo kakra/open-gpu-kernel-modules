@@ -48,6 +48,8 @@
 #endif
 
 #include <linux/dma-fence.h>
+#include <linux/mm.h>
+#include <linux/slab.h>
 
 struct nv_drm_atomic_state {
     struct NvKmsKapiRequestedModeSetConfig config;
@@ -63,12 +65,17 @@ static inline struct nv_drm_atomic_state *to_nv_atomic_state(
 nv_drm_atomic_state_base_t *
 nv_drm_atomic_state_alloc(struct drm_device *dev)
 {
+    /*
+     * The state is allocated on every atomic commit and is larger than a
+     * page (order-3 with kmalloc). It is CPU-only, so let kvzalloc fall back
+     * to vmalloc under fragmentation instead of invoking the OOM killer.
+     */
     struct nv_drm_atomic_state *nv_state =
-            nv_drm_calloc(1, sizeof(*nv_state));
+            kvzalloc(sizeof(*nv_state), GFP_KERNEL);
 
     if (nv_state == NULL ||
         nv_drm_atomic_state_base_init(dev, &nv_state->base) < 0) {
-        nv_drm_free(nv_state);
+        kvfree(nv_state);
         return NULL;
     }
 
@@ -85,7 +92,7 @@ void nv_drm_atomic_state_free(nv_drm_atomic_state_base_t *state)
     struct nv_drm_atomic_state *nv_state =
                     to_nv_atomic_state(state);
     nv_drm_atomic_state_base_default_release(state);
-    nv_drm_free(nv_state);
+    kvfree(nv_state);
 }
 
 /**
