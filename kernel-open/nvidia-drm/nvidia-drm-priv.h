@@ -229,6 +229,12 @@ struct nv_drm_device {
     struct {
         NvU32 count;
         NvU32 next_index;
+        /*
+         * Serializes picking and initializing a display semaphore. Commits on
+         * different CRTCs don't share DRM modeset locks and can run
+         * concurrently.
+         */
+        struct mutex lock;
     } display_semaphores;
 
 #if defined(NV_DRM_HAS_HDR_OUTPUT_METADATA)
@@ -308,7 +314,11 @@ struct nv_drm_device {
 static inline NvU32 nv_drm_next_display_semaphore(
     struct nv_drm_device *nv_dev)
 {
-    NvU32 current_index = nv_dev->display_semaphores.next_index++;
+    NvU32 current_index;
+
+    lockdep_assert_held(&nv_dev->display_semaphores.lock);
+
+    current_index = nv_dev->display_semaphores.next_index++;
 
     if (nv_dev->display_semaphores.next_index >=
         nv_dev->display_semaphores.count) {

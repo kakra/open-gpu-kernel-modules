@@ -253,12 +253,20 @@ static int __nv_drm_convert_in_fences(
             return -EINVAL;
         }
 
+        /*
+         * Picking an index and moving its semaphore from DONE to NOT_READY
+         * must not interleave with another commit doing the same, or both
+         * could claim the same semaphore and the first fence to signal would
+         * release both flips.
+         */
+        mutex_lock(&nv_dev->display_semaphores.lock);
         for (idx_count = 0; idx_count < nv_dev->display_semaphores.count; idx_count++) {
             semaphore_index = nv_drm_next_display_semaphore(nv_dev);
             if (nvKms->tryInitDisplaySemaphore(nv_dev->pDevice, semaphore_index)) {
                 break;
             }
         }
+        mutex_unlock(&nv_dev->display_semaphores.lock);
 
         if (idx_count == nv_dev->display_semaphores.count) {
             NV_DRM_DEV_LOG_ERR(
