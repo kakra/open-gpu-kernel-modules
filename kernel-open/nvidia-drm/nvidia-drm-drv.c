@@ -831,6 +831,7 @@ static int nv_drm_dev_load(struct drm_device *dev)
     nv_dev->display_semaphores.count =
         resInfo.caps.numDisplaySemaphores;
     nv_dev->display_semaphores.next_index = 0;
+    mutex_init(&nv_dev->display_semaphores.lock);
 
     nv_dev->vtFbBaseAddress = resInfo.vtFbBaseAddress;
     nv_dev->vtFbSize = resInfo.vtFbSize;
