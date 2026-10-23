@@ -34,6 +34,7 @@
 #include "nv-vgpu-vfio-interface.h"
 #endif
 #include <linux/completion.h>
+#include <linux/fs_struct.h>
 #include <linux/iommu.h>
 #include <linux/kthread.h>
 
@@ -439,7 +440,20 @@ static void nv_get_pci_sysfs_config
                    NV_PCI_SLOT_NUMBER(pci_dev));
     if (ret > 0 && ret < sizeof(filename))
     {
-        struct file *file = filp_open(filename, O_RDONLY, 0);
+        struct file *file;
+
+        /*
+         * Probe can run in a kthread. Since the kernel moved kthreads onto
+         * an empty nullfs root, path lookups from them fail unless they
+         * borrow PID 1's root, so do that when the kernel provides the
+         * helper.
+         */
+#if defined(scoped_with_init_fs)
+        scoped_with_init_fs()
+            file = filp_open(filename, O_RDONLY, 0);
+#else
+        file = filp_open(filename, O_RDONLY, 0);
+#endif
         if (!IS_ERR(file))
         {
 #if defined(NV_SEQ_READ_ITER_PRESENT)
