@@ -1015,6 +1015,8 @@ void NV_API_CALL nv_dma_release_sgt
     struct drm_gem_object *gem
 )
 {
+    struct module *owner;
+
     if (gem == NULL)
     {
         return;
@@ -1023,9 +1025,14 @@ void NV_API_CALL nv_dma_release_sgt
     // Do nothing with SGT, it will be unmapped and unpinned by the exporter
     WARN_ON(sgt == NULL);
 
+    // This may drop the last reference and free the GEM object, so look up
+    // its owner first. Keep the module reference until after the put, since
+    // the put may run the owner's free callback.
+    owner = gem->dev->driver->fops->owner;
+
     nv_dma_gem_object_put_unlocked(gem);
 
-    module_put(gem->dev->driver->fops->owner);
+    module_put(owner);
 }
 
 #else
