@@ -670,6 +670,22 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
     allocParams.compressible = &p->compressible;
 
     pMemory = nvKms->allocateMemory(nv_dev->pDevice, &allocParams);
+    if (pMemory == NULL && p->block_linear && p->compressible) {
+        /*
+         * Compressible allocations need comptags and are aligned to the
+         * compression page size, and scanout allocations must also be
+         * physically contiguous. In fragmented video memory, an uncompressed
+         * allocation can still fit. p->compressible is IN/OUT, so the caller
+         * sees that compression wasn't granted.
+         */
+        NV_DRM_DEV_LOG_INFO(
+                nv_dev,
+                "Failed to allocate compressible NVKMS video memory of size %" NvU64_fmtu " for GEM object, retrying without compression",
+                p->memory_size);
+        p->compressible = 0;
+        pMemory = nvKms->allocateMemory(nv_dev->pDevice, &allocParams);
+    }
+
     if (pMemory == NULL && (p->flags & NV_GEM_ALLOC_NO_SCANOUT)) {
         NV_DRM_DEV_LOG_INFO(
                 nv_dev,
@@ -679,9 +695,12 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
     }
 
     if (pMemory == NULL) {
-        ret = -EINVAL;
+        ret = -ENOMEM;
         NV_DRM_DEV_LOG_ERR(nv_dev,
-                           "Failed to allocate NVKMS memory for GEM object");
+                           "Failed to allocate NVKMS memory of size %" NvU64_fmtu " for %s GEM object",
+                           p->memory_size,
+                           (p->flags & NV_GEM_ALLOC_NO_SCANOUT) ?
+                               "offscreen" : "scanout");
         goto nvkms_alloc_memory_failed;
     }
 
