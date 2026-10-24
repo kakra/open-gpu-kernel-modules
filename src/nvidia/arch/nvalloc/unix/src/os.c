@@ -1072,6 +1072,7 @@ NV_STATUS osAllocPagesInternal(
             pSys->getProperty(pSys,
                 PDB_PROP_SYS_INITIALIZE_SYSTEM_MEMORY_ALLOCATIONS),
             unencrypted,
+            memdescGetFlag(pMemDesc, MEMDESC_FLAGS_ALLOC_FAIL_FAST),
             nodeId,
             memdescGetPteArray(pMemDesc, AT_CPU),
             &pMemData);
