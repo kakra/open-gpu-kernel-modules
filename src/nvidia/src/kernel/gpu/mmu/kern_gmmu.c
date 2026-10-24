@@ -1606,7 +1606,8 @@ _kgmmuClientShadowFaultBufferPagesAllocate
     NV_STATUS status;
     GMMU_CLIENT_SHADOW_FAULT_BUFFER *pClientShadowFaultBuffer;
     MEMORY_DESCRIPTOR *pMemDesc;
-    NvU64 flags = MEMDESC_FLAGS_NONE;
+    // The huge page attempt below falls back to small pages.
+    NvU64 flags = MEMDESC_FLAGS_ALLOC_FAIL_FAST;
     NvU32 shadowFaultBufferSizeTotal;
 
     //
@@ -1642,6 +1643,7 @@ _kgmmuClientShadowFaultBufferPagesAllocate
     {
         NV_PRINTF(LEVEL_ERROR, "Allocation failed with big page size, retrying with default page size\n");
         memdescSetPageSize(pMemDesc, AT_GPU, RM_PAGE_SIZE);
+        memdescSetFlag(pMemDesc, MEMDESC_FLAGS_ALLOC_FAIL_FAST, NV_FALSE);
         memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_33, pMemDesc);
     }
 
