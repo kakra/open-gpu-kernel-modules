@@ -1294,6 +1294,15 @@ typedef struct
 #define NVOS32_ATTR2_PROTECTION_DEVICE_READ_ONLY         0x00000001
 
 //
+// The client retries a failed sysmem allocation with a smaller page size.
+// RM asks the OS to fail high-order page allocations early instead of
+// reclaiming and compacting memory hard for them.
+//
+#define NVOS32_ATTR2_FAIL_FAST                               24:24
+#define NVOS32_ATTR2_FAIL_FAST_NO                       0x00000000
+#define NVOS32_ATTR2_FAIL_FAST_YES                      0x00000001
+
+//
 // Allow client allocations to go to protected/unprotected video/system memory.
 // When Ampere Protected Model aka APM or Confidential Compute is enabled and
 // DEFAULT flag is set by client, allocations go to protected memory. When
