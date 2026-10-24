@@ -1300,6 +1300,15 @@ typedef struct
 #define NVOS32_ATTR2_ALLOCATE_FROM_SUBHEAP_YES          0x00000001
 
 //
+// The client retries a failed sysmem allocation with a smaller page size.
+// RM asks the OS to fail high-order page allocations early instead of
+// reclaiming and compacting memory hard for them.
+//
+#define NVOS32_ATTR2_FAIL_FAST                               28:28
+#define NVOS32_ATTR2_FAIL_FAST_NO                       0x00000000
+#define NVOS32_ATTR2_FAIL_FAST_YES                      0x00000001
+
+//
 // Force the video memory allocation to localized allocation.
 // Same attribute can be used to choose between uGPU0 and uGPU1.
 // if set to default, the allocation will not be localized

@@ -441,6 +441,8 @@ typedef struct UvmGpuAllocInfo_tag
     NvHandle hPhysHandle;           // Handle for phys allocation either provided or retrieved
     NvBool   bUnprotected;            // Allocation to be made in unprotected memory whenever
                                       // SEV or GPU CC modes are enabled. Ignored otherwise
+    NvBool   bFailFast;               // Sysmem only: the caller retries with a smaller page
+                                      // size if the allocation fails, so fail it early
 } UvmGpuAllocInfo;
 
 typedef struct UvmGpuExternalMappingInfo_tag

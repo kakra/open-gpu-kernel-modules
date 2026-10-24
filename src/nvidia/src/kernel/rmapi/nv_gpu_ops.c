@@ -5063,6 +5063,13 @@ static NV_STATUS nvGpuOpsAllocPhysical(struct gpuDevice *device,
                                            _UNPROTECTED, memAllocParams.attr2);
     }
 
+    // The client retries a failed big-page allocation with smaller pages.
+    if (isSystemMemory && allocInfo->bFailFast)
+    {
+        memAllocParams.attr2 = FLD_SET_DRF(OS32, _ATTR2, _FAIL_FAST, _YES,
+                                           memAllocParams.attr2);
+    }
+
     // vid heap ctrl has a different policy as compared to other internal APIS
     // it expects the gpu lock to not be held. This means we have to drop the gpu lock
     // here. It is safe in this scenario because we still have the API lock and nothing
