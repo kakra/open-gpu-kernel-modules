@@ -1344,8 +1344,14 @@ memdescAlloc
     // Unicast memdescAlloc call but with flag set to allocate per subdevice.
     NV_ASSERT(!((pMemDesc->_flags & MEMDESC_FLAGS_ALLOC_PER_SUBDEVICE) && !gpumgrGetBcEnabledStatus(pGpu)));
 
-    // Actually allocate the memory
-    NV_CHECK_OK(status, LEVEL_ERROR, _memdescAllocInternal(pMemDesc));
+    //
+    // Actually allocate the memory. The caller of a fail-fast allocation
+    // retries with smaller pages, so its failure is not an error.
+    //
+    if (memdescGetFlag(pMemDesc, MEMDESC_FLAGS_ALLOC_FAIL_FAST))
+        NV_CHECK_OK(status, LEVEL_INFO, _memdescAllocInternal(pMemDesc));
+    else
+        NV_CHECK_OK(status, LEVEL_ERROR, _memdescAllocInternal(pMemDesc));
 
     if (status != NV_OK)
     {

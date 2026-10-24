@@ -1641,7 +1641,7 @@ _kgmmuClientShadowFaultBufferPagesAllocate
     // TODO: Bug 5042223
     if (status == NV_ERR_NO_MEMORY)
     {
-        NV_PRINTF(LEVEL_ERROR, "Allocation failed with big page size, retrying with default page size\n");
+        NV_PRINTF(LEVEL_INFO, "Allocation failed with big page size, retrying with default page size\n");
         memdescSetPageSize(pMemDesc, AT_GPU, RM_PAGE_SIZE);
         memdescSetFlag(pMemDesc, MEMDESC_FLAGS_ALLOC_FAIL_FAST, NV_FALSE);
         memdescTagAlloc(status, NV_FB_ALLOC_RM_INTERNAL_OWNER_UNNAMED_TAG_33, pMemDesc);

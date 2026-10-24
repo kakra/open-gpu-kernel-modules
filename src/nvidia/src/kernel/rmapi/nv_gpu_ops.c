@@ -5075,13 +5075,20 @@ static NV_STATUS nvGpuOpsAllocPhysical(struct gpuDevice *device,
     // here. It is safe in this scenario because we still have the API lock and nothing
     // from a GPU interrupt can change anything in the OPS state.
     physHandle = NV01_NULL_OBJECT;
-    NV_ASSERT_OK_OR_GOTO(status, pRmApi->Alloc(pRmApi,
-                                                device->session->handle,
-                                                isSystemMemory ? device->handle : device->subhandle,
-                                                &physHandle,
-                                                isSystemMemory ? NV01_MEMORY_SYSTEM : NV01_MEMORY_LOCAL_USER,
-                                                &memAllocParams,
-                                                sizeof(memAllocParams)), done);
+    status = pRmApi->Alloc(pRmApi,
+                           device->session->handle,
+                           isSystemMemory ? device->handle : device->subhandle,
+                           &physHandle,
+                           isSystemMemory ? NV01_MEMORY_SYSTEM : NV01_MEMORY_LOCAL_USER,
+                           &memAllocParams,
+                           sizeof(memAllocParams));
+    if (status != NV_OK)
+    {
+        // The client retries a failed fail-fast allocation with smaller pages.
+        if (!(isSystemMemory && allocInfo->bFailFast && (status == NV_ERR_NO_MEMORY)))
+            NV_ASSERT_OK_FAILED("pRmApi->Alloc", status);
+        goto done;
+    }
     if (allocInfo->bContiguousPhysAlloc)
         allocInfo->gpuPhysOffset = memAllocParams.offset;
 
