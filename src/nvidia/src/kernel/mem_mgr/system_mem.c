@@ -335,6 +335,10 @@ sysmemConstruct_IMPL
 
         memdescSetFlag(pMemDesc, MEMDESC_FLAGS_SYSMEM_OWNED_BY_CLIENT, NV_TRUE);
 
+        // A failed attempt is retried below with the next smaller page size.
+        if (bRetry)
+            memdescSetFlag(pMemDesc, MEMDESC_FLAGS_ALLOC_FAIL_FAST, NV_TRUE);
+
         if ((sysGetStaticConfig(SYS_GET_INSTANCE()))->bOsCCEnabled &&
             gpuIsCCFeatureEnabled(pGpu) 
             && FLD_TEST_DRF(OS32, _ATTR2, _MEMORY_PROTECTION, _UNPROTECTED,
