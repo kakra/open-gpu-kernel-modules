@@ -947,6 +947,7 @@ typedef struct nv_alloc_s {
         NvBool coherent    : 1;
         NvBool carveout    : 1;
         NvBool pool        : 1;
+        NvBool fail_fast   : 1;
     } flags;
     unsigned int   cache_type;
     unsigned int   num_pages;

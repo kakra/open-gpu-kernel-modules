@@ -4145,6 +4145,7 @@ NV_STATUS NV_API_CALL nv_alloc_pages(
     NvU32       cache_type,
     NvBool      zeroed,
     NvBool      unencrypted,
+    NvBool      fail_fast,
     NvS32       node_id,
     NvU64      *pte_array,
     void      **priv_data
@@ -4191,6 +4192,8 @@ NV_STATUS NV_API_CALL nv_alloc_pages(
 #endif
     if (unencrypted)
         at->flags.unencrypted = NV_TRUE;
+    if (fail_fast)
+        at->flags.fail_fast = NV_TRUE;
 
     if (node_id != NUMA_NO_NODE)
     {

@@ -310,7 +310,14 @@ static unsigned int nv_compute_gfp_mask(
         }
     }
 
-    gfp_mask |= __GFP_RETRY_MAYFAIL;
+    /*
+     * The caller of a fail_fast allocation retries with smaller pages, so
+     * don't stall in direct reclaim and compaction for high-order pages.
+     */
+    if (at->flags.fail_fast && (at->order > 0))
+        gfp_mask |= __GFP_NORETRY;
+    else
+        gfp_mask |= __GFP_RETRY_MAYFAIL;
 
     /*
      * __GFP_ACCOUNT is used to track/account for allocations with cgroups. The first attempt

@@ -421,6 +421,12 @@ typedef struct ADDRESS_TRANSLATION_ *ADDRESS_TRANSLATION;
 #define MEMDESC_FLAGS_ALLOW_FABRIC_LOOPBACK_MAPPING NVBIT64(56)
 
 //
+// The caller retries a failed sysmem allocation with a smaller page size.
+// Don't make the OS reclaim or compact memory hard for high-order pages.
+//
+#define MEMDESC_FLAGS_ALLOC_FAIL_FAST              NVBIT64(57)
+
+//
 // RM internal allocations owner tags
 // Total 200 tags are introduced, out of which some are already
 // replaced with known verbose strings
