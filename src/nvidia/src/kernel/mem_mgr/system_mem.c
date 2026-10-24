@@ -335,8 +335,11 @@ sysmemConstruct_IMPL
 
         memdescSetFlag(pMemDesc, MEMDESC_FLAGS_SYSMEM_OWNED_BY_CLIENT, NV_TRUE);
 
-        // A failed attempt is retried below with the next smaller page size.
-        if (bRetry)
+        //
+        // A failed attempt is retried with the next smaller page size, either
+        // below or by the client.
+        //
+        if (bRetry || FLD_TEST_DRF(OS32, _ATTR2, _FAIL_FAST, _YES, pAllocData->attr2))
             memdescSetFlag(pMemDesc, MEMDESC_FLAGS_ALLOC_FAIL_FAST, NV_TRUE);
 
         if ((sysGetStaticConfig(SYS_GET_INSTANCE()))->bOsCCEnabled &&
