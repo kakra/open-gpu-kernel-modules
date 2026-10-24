@@ -450,6 +450,11 @@ sysmemConstruct_IMPL
                 memdescDestroy(pMemDesc);
                 pAllocRequest->pMemDesc = pMemDesc = NULL;
             }
+            else if (memdescGetFlag(pMemDesc, MEMDESC_FLAGS_ALLOC_FAIL_FAST))
+            {
+                // The client retries with a smaller page size.
+                NV_CHECK_OK_OR_GOTO(rmStatus, LEVEL_INFO, rmStatus, failed_free_scanout_carveout);
+            }
             else
             {
                 NV_CHECK_OK_OR_GOTO(rmStatus, LEVEL_ERROR, rmStatus, failed_free_scanout_carveout);
