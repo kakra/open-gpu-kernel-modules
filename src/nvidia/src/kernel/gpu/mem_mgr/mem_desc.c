@@ -1192,8 +1192,14 @@ memdescAlloc
         return status;
     }
 
-    // Actually allocate the memory
-    NV_CHECK_OK(status, LEVEL_ERROR, _memdescAllocInternal(pMemDesc));
+    //
+    // Actually allocate the memory. The caller of a fail-fast allocation
+    // retries with smaller pages, so its failure is not an error.
+    //
+    if (memdescGetFlag(pMemDesc, MEMDESC_FLAGS_ALLOC_FAIL_FAST))
+        NV_CHECK_OK(status, LEVEL_INFO, _memdescAllocInternal(pMemDesc));
+    else
+        NV_CHECK_OK(status, LEVEL_ERROR, _memdescAllocInternal(pMemDesc));
 
     if (status != NV_OK)
     {
