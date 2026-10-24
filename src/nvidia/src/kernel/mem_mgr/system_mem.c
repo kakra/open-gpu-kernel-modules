@@ -557,6 +557,11 @@ sysmemConstruct_IMPL
                 }
                 NV_PRINTF(LEVEL_INFO, "Sysmem alloc failed, retrying with page size 0x%llx.\n", pageSize);
             }
+            else if (memdescGetFlag(pMemDesc, MEMDESC_FLAGS_ALLOC_FAIL_FAST))
+            {
+                // The client retries with a smaller page size.
+                NV_CHECK_OK_OR_GOTO(rmStatus, LEVEL_INFO, rmStatus, failed_free_memdesc);
+            }
             else
             {
                 NV_CHECK_OK_OR_GOTO(rmStatus, LEVEL_ERROR, rmStatus, failed_free_memdesc);
