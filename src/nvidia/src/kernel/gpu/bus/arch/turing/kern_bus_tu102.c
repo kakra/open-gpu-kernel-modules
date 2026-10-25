@@ -1189,18 +1189,28 @@ kbusGetStaticFbAperture_TU102
 
     status = kbusIncreaseStaticBar1Refcount_HAL(pGpu, pKernelBus, pMemDesc, busMapFlags);
 
-    if (status == NV_ERR_IN_USE || status == NV_ERR_NOT_SUPPORTED)
+    if (status != NV_OK)
     {
+        //
+        // An unmanaged range array belongs to the caller (it is on the
+        // stack in kbusMapFbApertureSingle), only free what was allocated
+        // above.
+        //
+        if (!bUnmanagedRange)
+        {
+            portMemFree(pMemArea->pRanges);
+            pMemArea->pRanges = NULL;
+        }
+
         //
         // This mapping is already in use or not supported,
         // and we need to make a dynamic mapping instead
         //
-        portMemFree(pMemArea->pRanges);
-        return NV_ERR_NOT_SUPPORTED;
-    }
-    else if (status != NV_OK)
-    {
-        portMemFree(pMemArea->pRanges);
+        if (status == NV_ERR_IN_USE || status == NV_ERR_NOT_SUPPORTED)
+        {
+            return NV_ERR_NOT_SUPPORTED;
+        }
+
         return status;
     }
 
