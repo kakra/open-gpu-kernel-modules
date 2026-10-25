@@ -111,6 +111,16 @@ struct nv_drm_crtc {
     spinlock_t flip_list_lock;
 
     /**
+     * @flips_enqueued, @flips_completed:
+     *
+     * Number of flips added to and removed from @flip_list, i.e. submitted
+     * with a hardware flip event and completed. Protected by
+     * @flip_list_lock.
+     */
+    u64 flips_enqueued;
+    u64 flips_completed;
+
+    /**
      * @modeset_permission_filep:
      *
      * The filep using this crtc with DRM_IOCTL_NVIDIA_GRANT_PERMISSIONS.
@@ -390,6 +400,7 @@ static inline void nv_drm_crtc_enqueue_flip(struct nv_drm_crtc *nv_crtc,
 {
     spin_lock(&nv_crtc->flip_list_lock);
     list_add(&nv_flip->list_entry, &nv_crtc->flip_list);
+    nv_crtc->flips_enqueued++;
     spin_unlock(&nv_crtc->flip_list_lock);
 }
 
@@ -413,6 +424,7 @@ struct nv_drm_flip *nv_drm_crtc_dequeue_flip(struct nv_drm_crtc *nv_crtc)
         pending_events = --nv_flip->pending_events;
         if (!pending_events) {
             list_del(&nv_flip->list_entry);
+            nv_crtc->flips_completed++;
         }
     }
     spin_unlock(&nv_crtc->flip_list_lock);

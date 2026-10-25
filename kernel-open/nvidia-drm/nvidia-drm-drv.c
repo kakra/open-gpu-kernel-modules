@@ -856,6 +856,8 @@ static int nv_drm_dev_load(struct drm_device *dev)
     mutex_init(&nv_dev->drm_lut_surface_pool_mutex);
     INIT_LIST_HEAD(&nv_dev->drm_lut_surface_pool);
 
+    nv_drm_held_fbs_init(nv_dev);
+
     /* Initialize drm_device::mode_config */
 
     nv_drm_init_mode_config(nv_dev, &resInfo);
@@ -964,6 +966,8 @@ static void nv_drm_dev_unload(struct drm_device *dev)
     if (nv_drm_vblank_module_param) {
         nv_drm_workthread_shutdown(&nv_dev->vblank_worker);
     }
+
+    nv_drm_held_fbs_fini(nv_dev);
 
     /* Clean up mode configuration */
 

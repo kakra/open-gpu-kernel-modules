@@ -40,6 +40,7 @@
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_file.h>
+#include <drm/drm_framebuffer.h>
 
 #if defined(NV_LINUX_NVHOST_H_PRESENT) && defined(CONFIG_TEGRA_GRHOST)
 #include <linux/nvhost.h>
@@ -634,32 +635,16 @@ int nv_drm_atomic_check(struct drm_device *dev,
     struct drm_crtc_state *crtc_state;
     int i;
 
-    struct drm_plane *plane;
-    struct drm_plane_state *plane_state;
-    int j;
-    bool cursor_surface_changed;
-    bool cursor_only_commit;
-
     bool infoframe_changed;
     for_each_new_crtc_in_state(state, crtc, crtc_state, i) {
 
         /*
-         * Committing cursor surface change without any other plane change can
-         * cause cursor surface in use by HW to be freed prematurely. Add all
-         * planes to the commit to avoid this. This is a workaround for bug 4966645.
+         * Cursor-only commits don't need the other planes added: committing a
+         * cursor surface change alone could let the old cursor surface be
+         * freed while the HW still reads it (bug 4966645), but
+         * nv_drm_atomic_commit() keeps the old cursor framebuffers until the
+         * new ones are latched (see nv_drm_hold_old_cursor_fbs()).
          */
-        cursor_surface_changed = false;
-        cursor_only_commit = true;
-        for_each_new_plane_in_state(crtc_state->state, plane, plane_state, j) {
-            if (plane->type == DRM_PLANE_TYPE_CURSOR) {
-                if (plane_state->fb != plane->state->fb) {
-                    cursor_surface_changed = true;
-                }
-            } else {
-                cursor_only_commit = false;
-                break;
-            }
-        }
 
         /*
          * Check if infoframe-related properties changed on any connector
@@ -713,9 +698,7 @@ int nv_drm_atomic_check(struct drm_device *dev,
          * the commit. Similarly, if infoframe properties changed, add all
          * planes to ensure the flip is serialized via flip_list.
          */
-        if (crtc_state->color_mgmt_changed ||
-            (cursor_surface_changed && cursor_only_commit) ||
-            infoframe_changed) {
+        if (crtc_state->color_mgmt_changed || infoframe_changed) {
             if ((ret = drm_atomic_add_affected_planes(state, crtc)) != 0) {
                 goto done;
             }
@@ -834,7 +817,207 @@ static void __nv_drm_handle_flip_event(struct nv_drm_crtc *nv_crtc)
 
     wake_up_all(&nv_dev->flip_event_wq);
 
+    /* Old cursor framebuffers may wait for this flip */
+    if (!list_empty(&nv_dev->held_fbs)) {
+        mod_delayed_work(nv_drm_percpu_wq, &nv_dev->held_fbs_work, 0);
+    }
+
     nv_drm_free(nv_flip);
+}
+
+/*
+ * A commit that replaces a cursor framebuffer may complete without a hardware
+ * flip event, so its event is sent right away and userspace may free the old
+ * framebuffer while the hardware still reads it until the next vblank (bug
+ * 4966645). Keep a reference on the old cursor framebuffers until the new
+ * ones are latched:
+ *
+ * - If the commit enqueued a flip on the CRTC, the cursor change is part of
+ *   that flip's display update; drop the reference once the flip completes.
+ * - Otherwise, once the flips enqueued before the commit have completed, wait
+ *   NV_DRM_OLD_CURSOR_FB_HOLD_MS for the cursor update to be latched.
+ *
+ * The references are dropped from a work item: dropping the last one
+ * unregisters the surface from NVKMS, which sleeps.
+ */
+#define NV_DRM_OLD_CURSOR_FB_HOLD_MS 100
+
+struct nv_drm_held_fb {
+    struct list_head list_entry;
+    struct drm_framebuffer *fb;
+    struct nv_drm_crtc *nv_crtc;
+    /* Release once nv_crtc->flips_completed reaches this */
+    u64 flip_target;
+    /* The commit enqueued the flip that flip_target counts */
+    bool carries_flip;
+    /* Release at release_time, set once flip_target was reached */
+    bool timer_started;
+    unsigned long release_time;
+};
+
+static void nv_drm_put_held_fbs(struct list_head *held_fbs)
+{
+    struct nv_drm_held_fb *held, *next;
+
+    list_for_each_entry_safe(held, next, held_fbs, list_entry) {
+        list_del(&held->list_entry);
+        drm_framebuffer_put(held->fb);
+        nv_drm_free(held);
+    }
+}
+
+static u64 nv_drm_crtc_read_flip_count(struct nv_drm_crtc *nv_crtc,
+                                       bool completed)
+{
+    u64 count;
+
+    spin_lock(&nv_crtc->flip_list_lock);
+    count = completed ? nv_crtc->flips_completed : nv_crtc->flips_enqueued;
+    spin_unlock(&nv_crtc->flip_list_lock);
+
+    return count;
+}
+
+/*
+ * Whether held can be released now. Otherwise, *delay is set to the time
+ * until it can be, or left alone if that waits for a flip to complete.
+ * Called with nv_drm_device::held_fbs_lock held.
+ */
+static bool nv_drm_held_fb_expired(struct nv_drm_held_fb *held,
+                                   unsigned long *delay)
+{
+    if (nv_drm_crtc_read_flip_count(held->nv_crtc, true) < held->flip_target) {
+        /* __nv_drm_handle_flip_event() kicks the work */
+        return false;
+    }
+
+    if (held->carries_flip) {
+        return true;
+    }
+
+    if (!held->timer_started) {
+        held->release_time =
+            jiffies + msecs_to_jiffies(NV_DRM_OLD_CURSOR_FB_HOLD_MS);
+        held->timer_started = true;
+    }
+
+    if (time_before(jiffies, held->release_time)) {
+        *delay = min(*delay, held->release_time - jiffies);
+        return false;
+    }
+
+    return true;
+}
+
+static void nv_drm_release_held_fbs_work(struct work_struct *work)
+{
+    struct nv_drm_device *nv_dev =
+        container_of(to_delayed_work(work), struct nv_drm_device,
+                     held_fbs_work);
+    struct nv_drm_held_fb *held, *next;
+    LIST_HEAD(expired);
+    unsigned long delay = ULONG_MAX;
+
+    spin_lock(&nv_dev->held_fbs_lock);
+    list_for_each_entry_safe(held, next, &nv_dev->held_fbs, list_entry) {
+        if (nv_drm_held_fb_expired(held, &delay)) {
+            list_move_tail(&held->list_entry, &expired);
+        }
+    }
+    spin_unlock(&nv_dev->held_fbs_lock);
+
+    nv_drm_put_held_fbs(&expired);
+
+    if (delay != ULONG_MAX) {
+        queue_delayed_work(nv_drm_percpu_wq, &nv_dev->held_fbs_work, delay);
+    }
+}
+
+void nv_drm_held_fbs_init(struct nv_drm_device *nv_dev)
+{
+    INIT_LIST_HEAD(&nv_dev->held_fbs);
+    spin_lock_init(&nv_dev->held_fbs_lock);
+    INIT_DELAYED_WORK(&nv_dev->held_fbs_work, nv_drm_release_held_fbs_work);
+}
+
+/* Called once no more commits or flip events can happen */
+void nv_drm_held_fbs_fini(struct nv_drm_device *nv_dev)
+{
+    LIST_HEAD(held_fbs);
+
+    cancel_delayed_work_sync(&nv_dev->held_fbs_work);
+
+    spin_lock(&nv_dev->held_fbs_lock);
+    list_splice_init(&nv_dev->held_fbs, &held_fbs);
+    spin_unlock(&nv_dev->held_fbs_lock);
+
+    nv_drm_put_held_fbs(&held_fbs);
+}
+
+/*
+ * Take a reference on the framebuffers that the commit removes from cursor
+ * planes. Called before drm_atomic_helper_swap_state(), so plane->state is
+ * the current state.
+ */
+static int nv_drm_hold_old_cursor_fbs(nv_drm_atomic_state_base_t *state,
+                                      struct list_head *held_fbs)
+{
+    struct drm_plane *plane;
+    struct drm_plane_state *new_plane_state;
+    int i;
+
+    for_each_new_plane_in_state(state, plane, new_plane_state, i) {
+        struct drm_framebuffer *old_fb = plane->state->fb;
+        struct nv_drm_held_fb *held;
+
+        if (plane->type != DRM_PLANE_TYPE_CURSOR ||
+            old_fb == NULL || old_fb == new_plane_state->fb ||
+            WARN_ON(plane->state->crtc == NULL)) {
+            continue;
+        }
+
+        held = nv_drm_calloc(1, sizeof(*held));
+        if (held == NULL) {
+            nv_drm_put_held_fbs(held_fbs);
+            return -ENOMEM;
+        }
+
+        drm_framebuffer_get(old_fb);
+        held->fb = old_fb;
+        held->nv_crtc = to_nv_crtc(plane->state->crtc);
+        /* The commit holds the CRTC's lock, no other commit enqueues flips */
+        held->flip_target = nv_drm_crtc_read_flip_count(held->nv_crtc, false);
+        list_add_tail(&held->list_entry, held_fbs);
+    }
+
+    return 0;
+}
+
+/* Called after the commit was handed to NVKMS */
+static void nv_drm_queue_held_fbs(struct nv_drm_device *nv_dev,
+                                  struct list_head *held_fbs)
+{
+    struct nv_drm_held_fb *held;
+
+    if (list_empty(held_fbs)) {
+        return;
+    }
+
+    list_for_each_entry(held, held_fbs, list_entry) {
+        const u64 enqueued =
+            nv_drm_crtc_read_flip_count(held->nv_crtc, false);
+
+        if (enqueued != held->flip_target) {
+            held->flip_target = enqueued;
+            held->carries_flip = true;
+        }
+    }
+
+    spin_lock(&nv_dev->held_fbs_lock);
+    list_splice_tail_init(held_fbs, &nv_dev->held_fbs);
+    spin_unlock(&nv_dev->held_fbs_lock);
+
+    mod_delayed_work(nv_drm_percpu_wq, &nv_dev->held_fbs_work, 0);
 }
 
 int nv_drm_atomic_commit(struct drm_device *dev,
@@ -847,6 +1030,7 @@ int nv_drm_atomic_commit(struct drm_device *dev,
     struct drm_crtc *crtc = NULL;
     struct drm_crtc_state *crtc_state = NULL;
     struct nv_drm_device *nv_dev = to_nv_device(dev);
+    LIST_HEAD(held_fbs);
 
     /*
      * XXX: drm_mode_config_funcs::atomic_commit() mandates to return -EBUSY
@@ -916,8 +1100,14 @@ int nv_drm_atomic_commit(struct drm_device *dev,
      * expected.
      */
 
+    ret = nv_drm_hold_old_cursor_fbs(state, &held_fbs);
+    if (ret != 0) {
+        return ret;
+    }
+
     ret = drm_atomic_helper_swap_state(state, false /* stall */);
     if (WARN_ON(ret != 0)) {
+        nv_drm_put_held_fbs(&held_fbs);
         return ret;
     }
 
@@ -942,8 +1132,11 @@ int nv_drm_atomic_commit(struct drm_device *dev,
             "Failed to apply atomic modeset.  Error code: %d",
             ret);
 
+        nv_drm_queue_held_fbs(nv_dev, &held_fbs);
         goto done;
     }
+
+    nv_drm_queue_held_fbs(nv_dev, &held_fbs);
 
     for_each_old_crtc_in_state(state, crtc, crtc_state, i) {
         struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
