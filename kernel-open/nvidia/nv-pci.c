@@ -2988,6 +2988,26 @@ nv_pci_remove(struct pci_dev *pci_dev)
     nv_pci_remove_helper(pci_dev, true);
 }
 
+static NvBool
+nv_pci_shutdown_while_suspended(nv_linux_state_t *nvl)
+{
+    NvBool suspended;
+
+#if defined(CONFIG_PM)
+    if (nv_system_pm_transition_pending())
+    {
+        return NV_TRUE;
+    }
+#endif
+
+    /* Suspended by nv_pmops_freeze() without the PM notifier */
+    down(&nvl->ldata_lock);
+    suspended = (nvl->nv_state.flags & NV_FLAG_SUSPENDED) != 0;
+    up(&nvl->ldata_lock);
+
+    return suspended;
+}
+
 static void
 nv_pci_shutdown(struct pci_dev *pci_dev)
 {
@@ -3008,11 +3028,29 @@ nv_pci_shutdown(struct pci_dev *pci_dev)
     nv_pci_tegra_unregister_devfreq(pci_dev);
 #endif
 
-    nv_pci_remove_helper(pci_dev, false);
-
-    if (pci_get_drvdata(pci_dev) != NULL)
+    /*
+     * Hibernation in the shutdown and reboot modes powers off through
+     * device_shutdown() while the GPU is still suspended for hibernation:
+     * the PM notifier or procfs suspend holds nvkms_pm_lock for writing
+     * until a resume that never comes, and nv_pmops_thaw() leaves the GPU
+     * suspended. Tearing the driver down then deadlocks or waits forever on
+     * the GPU. The GPU is already shut down, power is about to be cut and
+     * resume goes through nv_pmops_restore(), so only disable bus mastering,
+     * as drivers before 595 did.
+     */
+    if (nv_pci_shutdown_while_suspended(nvl))
     {
-        nvl->nv_state.is_shutdown = NV_TRUE;
+        nv_printf(NV_DBG_INFO,
+                  "NVRM: GPU suspended for hibernation, skipping teardown at shutdown\n");
+    }
+    else
+    {
+        nv_pci_remove_helper(pci_dev, false);
+
+        if (pci_get_drvdata(pci_dev) != NULL)
+        {
+            nvl->nv_state.is_shutdown = NV_TRUE;
+        }
     }
 
     /* pci_clear_master is not defined for !CONFIG_PCI */

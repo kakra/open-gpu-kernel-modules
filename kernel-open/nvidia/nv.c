@@ -5240,6 +5240,22 @@ done:
     return status;
 }
 
+/*
+ * Whether a system suspend or hibernation entered through the PM notifier or
+ * the procfs suspend interface hasn't been resumed from yet.
+ */
+NvBool
+nv_system_pm_transition_pending(void)
+{
+    NvBool pending;
+
+    down(&nv_system_power_state_lock);
+    pending = (nv_system_power_state != NV_POWER_STATE_RUNNING);
+    up(&nv_system_power_state_lock);
+
+    return pending;
+}
+
 int nv_pmops_suspend(
     struct device *dev
 )
