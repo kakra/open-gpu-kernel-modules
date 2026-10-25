@@ -215,6 +215,14 @@ struct nv_drm_device {
 
     struct delayed_work hotplug_event_work;
     struct delayed_work content_protection_event_work;
+
+    /*
+     * Old cursor framebuffers kept until the hardware stops reading them,
+     * see nv_drm_hold_old_cursor_fbs().
+     */
+    struct list_head held_fbs;
+    spinlock_t held_fbs_lock;
+    struct delayed_work held_fbs_work;
     atomic_t enable_event_handling;
 
     /**
