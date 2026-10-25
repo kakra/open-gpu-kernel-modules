@@ -72,6 +72,25 @@ reusemappingdbDestruct
     portMemSet(pReuseMappingDb, 0, sizeof(*pReuseMappingDb));
 }
 
+//
+// Physical maps are created per alloc context on demand. Drop one once its last
+// entry is gone, otherwise every alloc context that was ever mapped keeps a node
+// in allocCtxPhysicalMap until the database is destroyed.
+//
+static void
+_reusemappingdbPutPhysicalMap
+(
+    ReuseMappingDb *pReuseMappingDb,
+    ReuseMappingDbPhysicalMap *pPhysicalMap
+)
+{
+    if ((pPhysicalMap != NULL) && (mapCount(pPhysicalMap) == 0))
+    {
+        mapDestroy(pPhysicalMap);
+        mapRemove(&(pReuseMappingDb->allocCtxPhysicalMap), pPhysicalMap);
+    }
+}
+
 /*!
  * @brief   Unmap a range returned from a previous map calll
  *
@@ -133,6 +152,7 @@ reusemappingdbUnmap
 
             mapRemove(&(pReuseMappingDb->virtualMap), pEntry);
             mapRemove(pPhysicalMap, pEntry);
+            _reusemappingdbPutPhysicalMap(pReuseMappingDb, pPhysicalMap);
 
             pReuseMappingDb->pUnmapCb(pReuseMappingDb->pGlobalCtx, pEntryAllocCtx, revRange);
             PORT_FREE(pReuseMappingDb->pAllocator, pEntry);
@@ -218,16 +238,8 @@ reusemappingdbMap
     NV_ASSERT_OR_RETURN( bSingleRange || bNoReuse, NV_ERR_NOT_SUPPORTED);
 
     pPhysicalMap = mapFind(&(pReuseMappingDb->allocCtxPhysicalMap), (NvU64) pAllocCtx);
-    
-    // We don't currently have any mappings for this alloc context, create new map
-    if (pPhysicalMap == NULL)
-    {
-        pPhysicalMap = mapInsertNew(&(pReuseMappingDb->allocCtxPhysicalMap), (NvU64) pAllocCtx);
-        mapInitIntrusive(pPhysicalMap);
-        NV_ASSERT_OR_RETURN(pPhysicalMap != NULL, NV_ERR_NO_MEMORY);
-    }
 
-    if (!bNoReuse && bSingleRange)
+    if (!bNoReuse && bSingleRange && (pPhysicalMap != NULL))
     {
         ReuseMappingDbEntry *pEntry = mapFindLEQ(pPhysicalMap, range.start);
         // If no range LEQ, then try GEQ
@@ -270,6 +282,14 @@ reusemappingdbMap
             }
         }
     }
+    // We don't currently have any mappings for this alloc context, create new map
+    if (bAddToMap && (pPhysicalMap == NULL))
+    {
+        pPhysicalMap = mapInsertNew(&(pReuseMappingDb->allocCtxPhysicalMap), (NvU64) pAllocCtx);
+        NV_ASSERT_OR_RETURN(pPhysicalMap != NULL, NV_ERR_NO_MEMORY);
+        mapInitIntrusive(pPhysicalMap);
+    }
+
     // Initialize linked list of new entries
     token.numNewEntries = 0;
     token.pDb = pReuseMappingDb;
@@ -326,5 +346,6 @@ err_unmap:
         token.pList = token.pList->newMappingNode.pNextEntry;
         PORT_FREE(pReuseMappingDb->pAllocator, pCur);
     }
+    _reusemappingdbPutPhysicalMap(pReuseMappingDb, pPhysicalMap);
     return status;
 }
