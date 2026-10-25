@@ -43,6 +43,9 @@ int nv_drm_atomic_check(struct drm_device *dev,
 int nv_drm_atomic_commit(struct drm_device *dev,
                          nv_drm_atomic_state_base_t *state, bool nonblock);
 
+void nv_drm_held_fbs_init(struct nv_drm_device *nv_dev);
+void nv_drm_held_fbs_fini(struct nv_drm_device *nv_dev);
+
 
 void nv_drm_handle_flip_occurred(struct nv_drm_device *nv_dev,
                                  NvU32 head, NvU32 plane);
