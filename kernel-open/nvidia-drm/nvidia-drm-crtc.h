@@ -73,6 +73,12 @@ struct nv_drm_crtc {
     NvU64 vblank_duration_ns;
 
     /*
+     * Length of a whole frame of the current mode, zero if unknown.
+     * Protected by dev->vblank_time_lock.
+     */
+    NvU64 vblank_period_ns;
+
+    /*
      * Flips whose completion event arrived before the vblank they happened
      * at was handled; their DRM events are sent from the vblank callback.
      * Protected by dev->event_lock.
@@ -188,10 +194,28 @@ struct nv_drm_flip {
      * @submit_time:
      *
      * CLOCK_MONOTONIC time (ns) just before the flip was handed to NVKMS. The
-     * flip happens at the first vblank starting after this. Zero if the flip
-     * may happen later (tearing flips, unsignaled acquire fences).
+     * flip happens at the first vblank starting after NVKMS kicked it off to
+     * the hardware, which is after this. Zero if the flip may happen later
+     * (tearing flips, unsignaled acquire fences).
      */
     NvU64 submit_time;
+
+    /**
+     * @kick_time:
+     *
+     * CLOCK_MONOTONIC time (ns) just after NVKMS returned, so the hardware
+     * got the flip before this. Zero until then. Only set while the flip is
+     * in &nv_drm_crtc.flip_list, see nv_drm_crtc_set_flip_kick_time().
+     */
+    NvU64 kick_time;
+
+    /**
+     * @event_time:
+     *
+     * CLOCK_MONOTONIC time (ns) the flip-occurred event was handled, so the
+     * flip happened before this. Protected by &drm_device.event_lock.
+     */
+    NvU64 event_time;
 };
 
 struct nv_drm_crtc_state {
@@ -363,7 +387,8 @@ static inline struct nv_drm_crtc *to_nv_crtc(struct drm_crtc *crtc)
 }
 
 bool nv_drm_crtc_handle_flip_events(struct nv_drm_crtc *nv_crtc,
-                                    struct nv_drm_flip **pp_nv_flip);
+                                    struct nv_drm_flip **pp_nv_flip,
+                                    NvU64 event_time);
 
 bool nv_drm_crtc_has_pending_flip_events(struct nv_drm_crtc *nv_crtc);
 
@@ -436,6 +461,30 @@ struct nv_drm_flip *nv_drm_crtc_dequeue_flip(struct nv_drm_crtc *nv_crtc)
     }
 
     return nv_flip;
+}
+
+/**
+ * nv_drm_crtc_set_flip_kick_time - Set the kick time of a flip that is
+ * still in flip_list of crtc.
+ *
+ * The flip event can be handled before NVKMS returns, and the flip is freed
+ * once it is dequeued, so only touch it while it is still queued. A dequeued
+ * flip doesn't need the kick time any more: its event time bounds the flip.
+ */
+static inline void nv_drm_crtc_set_flip_kick_time(struct nv_drm_crtc *nv_crtc,
+                                                  struct nv_drm_flip *nv_flip,
+                                                  NvU64 kick_time)
+{
+    struct nv_drm_flip *nv_queued_flip;
+
+    spin_lock(&nv_crtc->flip_list_lock);
+    list_for_each_entry(nv_queued_flip, &nv_crtc->flip_list, list_entry) {
+        if (nv_queued_flip == nv_flip) {
+            WRITE_ONCE(nv_flip->kick_time, kick_time);
+            break;
+        }
+    }
+    spin_unlock(&nv_crtc->flip_list_lock);
 }
 
 void nv_drm_enumerate_crtcs_and_planes(
