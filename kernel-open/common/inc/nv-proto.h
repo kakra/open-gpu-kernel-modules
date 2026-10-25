@@ -77,6 +77,7 @@ int         nvidia_dev_unblock_gc6      (const NvU8 *, nvidia_stack_t *);
 
 #if defined(CONFIG_PM)
 NV_STATUS     nv_set_system_power_state (nv_power_state_t, nv_pm_action_depth_t);
+NvBool        nv_system_pm_transition_pending(void);
 #endif
 
 void          nvidia_modeset_suspend           (NvU32 gpuId);
