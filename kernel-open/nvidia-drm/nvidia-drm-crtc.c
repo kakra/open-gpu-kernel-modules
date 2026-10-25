@@ -3299,8 +3299,13 @@ failed:
  * belong to the flip.
  *
  * Instead, keep a short history of handled vblanks and report each flip at
- * the first vblank that started after the flip was submitted to NVKMS. If
- * that vblank hasn't been handled yet, hold the event until it is.
+ * the first vblank that started after NVKMS kicked it off to the hardware.
+ * That happens somewhere inside applyModeSetConfig(), which may wait for the
+ * NVKMS lock or push buffer space, so only the times before and after the
+ * call are known. A vblank starting in between is ambiguous; the flip
+ * happened at it only if the next vblank started after the flip event was
+ * handled, see __nv_drm_crtc_find_flip_vblank(). If the vblank of a flip
+ * hasn't been handled yet, hold the event until it is.
  *
  * Flips that may happen later than that are left without a submit time and
  * reported at the current vblank like before: tearing flips, flips waiting
@@ -3356,20 +3361,31 @@ static void __nv_drm_crtc_send_flip_events_at(struct nv_drm_crtc *nv_crtc,
 }
 
 /*
- * Find the handled vblank a flip submitted at submit_time happened at, i.e.
- * the first one that started after submit_time. Returns false if it hasn't
- * been handled yet. Called with dev->vblank_time_lock held, and only with a
- * non-empty history.
+ * Find the handled vblank nv_flip happened at: the first one that started
+ * after the hardware got the flip, which was between its submit_time and
+ * kick_time, and before its event_time. Returns false if that vblank hasn't
+ * been handled yet or it can't be told yet. Called with dev->vblank_time_lock
+ * held, and only with a non-empty history.
  */
 static bool __nv_drm_crtc_find_flip_vblank(const struct nv_drm_crtc *nv_crtc,
-                                           NvU64 submit_time,
+                                           const struct nv_drm_flip *nv_flip,
                                            u64 *count, NvU64 *time)
 {
     const unsigned int len = nv_crtc->vblank_history_len;
     const unsigned int first =
         (nv_crtc->vblank_history_next + NV_DRM_VBLANK_HISTORY - len) %
         NV_DRM_VBLANK_HISTORY;
+    const NvU64 submit_time = READ_ONCE(nv_flip->submit_time);
+    const NvU64 event_time = nv_flip->event_time;
+    NvU64 kick_time = READ_ONCE(nv_flip->kick_time);
+    NvU64 found_start = 0;
+    bool found = false, decided = false;
     unsigned int i;
+
+    /* The event can be handled before applyModeSetConfig() returns */
+    if (kick_time == 0 || kick_time > event_time) {
+        kick_time = event_time;
+    }
 
     for (i = 0; i < len; i++) {
         const unsigned int idx = (first + i) % NV_DRM_VBLANK_HISTORY;
@@ -3381,14 +3397,44 @@ static bool __nv_drm_crtc_find_flip_vblank(const struct nv_drm_crtc *nv_crtc,
          * submitted, the flip happened at it or an older one that has
          * dropped out of the history; the oldest is the best estimate.
          */
-        if (vblank_start >= submit_time) {
-            *count = nv_crtc->vblank_history[idx].count;
-            *time = nv_crtc->vblank_history[idx].time;
-            return true;
+        if (vblank_start < submit_time) {
+            continue;
+        }
+
+        /* A vblank starting after the event was handled is too late */
+        if (found && vblank_start > event_time) {
+            decided = true;
+            break;
+        }
+
+        *count = nv_crtc->vblank_history[idx].count;
+        *time = nv_crtc->vblank_history[idx].time;
+        found_start = vblank_start;
+        found = true;
+
+        /* The hardware had the flip when this vblank started */
+        if (vblank_start >= kick_time) {
+            decided = true;
+            break;
         }
     }
 
-    return false;
+    if (!found) {
+        return false;
+    }
+
+    /*
+     * The found vblank started while NVKMS was handing the flip to the
+     * hardware, and the next one hasn't been handled yet. If the next one
+     * starts after the event was handled, the flip happened at the found
+     * one; otherwise wait for the next one.
+     */
+    if (!decided && nv_crtc->vblank_period_ns != 0 &&
+        found_start + nv_crtc->vblank_period_ns > event_time) {
+        decided = true;
+    }
+
+    return decided;
 }
 
 /*
@@ -3411,8 +3457,7 @@ static void __nv_drm_crtc_process_pending_flip_events(struct nv_drm_crtc *nv_crt
 
         spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
         if (nv_crtc->vblank_history_len > 0) {
-            found = __nv_drm_crtc_find_flip_vblank(nv_crtc,
-                                                   nv_flip->submit_time,
+            found = __nv_drm_crtc_find_flip_vblank(nv_crtc, nv_flip,
                                                    &count, &time);
             if (!found && all) {
                 const unsigned int last =
@@ -3449,7 +3494,8 @@ static void __nv_drm_crtc_process_pending_flip_events(struct nv_drm_crtc *nv_crt
  * once the vblank the flip happened at has been handled.
  */
 bool nv_drm_crtc_handle_flip_events(struct nv_drm_crtc *nv_crtc,
-                                    struct nv_drm_flip **pp_nv_flip)
+                                    struct nv_drm_flip **pp_nv_flip,
+                                    NvU64 event_time)
 {
     struct drm_device *dev = nv_crtc->base.dev;
     struct nv_drm_flip *nv_flip = *pp_nv_flip;
@@ -3462,14 +3508,15 @@ bool nv_drm_crtc_handle_flip_events(struct nv_drm_crtc *nv_crtc,
         return false;
     }
 
+    nv_flip->event_time = event_time;
+
     spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
     usable = nv_crtc->vblank_intr_fired &&
              nv_crtc->vblank_history_len > 0 &&
              nv_crtc->vblank_duration_ns != 0 &&
              READ_ONCE(nv_flip->submit_time) != 0;
     if (usable) {
-        found = __nv_drm_crtc_find_flip_vblank(nv_crtc,
-                                               READ_ONCE(nv_flip->submit_time),
+        found = __nv_drm_crtc_find_flip_vblank(nv_crtc, nv_flip,
                                                &count, &time);
     }
     spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
@@ -3589,12 +3636,14 @@ void nv_drm_crtc_set_vblank_duration(struct nv_drm_crtc *nv_crtc,
     struct drm_device *dev = nv_crtc->base.dev;
     const struct drm_display_mode *mode = &crtc_state->adjusted_mode;
     unsigned long irqflags;
-    NvU64 duration = 0;
+    NvU64 duration = 0, period = 0;
 
     if (mode->clock > 0 && mode->vtotal > mode->vdisplay) {
         /* mode->clock is in kHz */
         duration = div_u64((u64)(mode->vtotal - mode->vdisplay) *
                            mode->htotal * 1000000ULL, mode->clock);
+        period = div_u64((u64)mode->vtotal * mode->htotal * 1000000ULL,
+                         mode->clock);
     }
 
 #if defined(NV_DRM_CRTC_STATE_HAS_VRR_ENABLED)
@@ -3610,13 +3659,15 @@ void nv_drm_crtc_set_vblank_duration(struct nv_drm_crtc *nv_crtc,
 
     spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
     nv_crtc->vblank_duration_ns = duration;
+    nv_crtc->vblank_period_ns = period;
     spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
 }
 
 #else
 
 bool nv_drm_crtc_handle_flip_events(struct nv_drm_crtc *nv_crtc,
-                                    struct nv_drm_flip **pp_nv_flip)
+                                    struct nv_drm_flip **pp_nv_flip,
+                                    NvU64 event_time)
 {
     return false;
 }
