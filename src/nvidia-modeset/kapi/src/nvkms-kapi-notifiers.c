@@ -103,8 +103,7 @@ static void InitNotifier(struct NvKmsKapiDevice *device,
 
 static NvBool AllocateNisoSurface(struct NvKmsKapiDevice *device,
                                   struct NvKmsKapiNisoSurface *surface,
-                                  NvU64 size,
-                                  NvBool inVideoMemory)
+                                  NvU64 size)
 {
     struct NvKmsRegisterSurfaceParams surfParams = {};
     NV_STATUS status = 0;
@@ -121,21 +120,12 @@ static NvBool AllocateNisoSurface(struct NvKmsKapiDevice *device,
         return NV_FALSE;
     }
 
-    if (inVideoMemory) {
-        ret = nvKmsKapiAllocateVideoMemory(device,
-                                           surface->hRmHandle,
-                                           NvKmsSurfaceMemoryLayoutPitch,
-                                           size,
-                                           NVKMS_KAPI_ALLOCATION_TYPE_NOTIFIER,
-                                           &compressible);
-    } else {
-        ret = nvKmsKapiAllocateSystemMemory(device,
-                                            surface->hRmHandle,
-                                            NvKmsSurfaceMemoryLayoutPitch,
-                                            size,
-                                            NVKMS_KAPI_ALLOCATION_TYPE_NOTIFIER,
-                                            &compressible);
-    }
+    ret = nvKmsKapiAllocateSystemMemory(device,
+                                        surface->hRmHandle,
+                                        NvKmsSurfaceMemoryLayoutPitch,
+                                        size,
+                                        NVKMS_KAPI_ALLOCATION_TYPE_NOTIFIER,
+                                        &compressible);
 
     if (!ret) {
         nvFreeUnixRmHandle(&device->handleAllocator, surface->hRmHandle);
@@ -208,8 +198,7 @@ NvBool nvKmsKapiAllocateNotifiers(struct NvKmsKapiDevice *device)
 
     if (!AllocateNisoSurface(device,
                              &device->notifier,
-                             NVKMS_KAPI_NOTIFIERS_SURFACE_SIZE,
-                             NV_FALSE /* inVideoMemory */)) {
+                             NVKMS_KAPI_NOTIFIERS_SURFACE_SIZE)) {
         return NV_FALSE;
     }
 
@@ -246,15 +235,13 @@ static void ResetSemaphore(struct NvKmsKapiDevice *device,
 
 #define NVKMS_KAPI_SEMAPHORE_SURFACE_SIZE 0x1000
 
-NvBool nvKmsKapiAllocateSemaphores(struct NvKmsKapiDevice *device,
-                                   NvBool inVideoMemory)
+NvBool nvKmsKapiAllocateSemaphores(struct NvKmsKapiDevice *device)
 {
     NvU32 index;
 
     if (!AllocateNisoSurface(device,
                              &device->semaphore,
-                             NVKMS_KAPI_SEMAPHORE_SURFACE_SIZE,
-                             inVideoMemory)) {
+                             NVKMS_KAPI_SEMAPHORE_SURFACE_SIZE)) {
         return NV_FALSE;
     }
 
