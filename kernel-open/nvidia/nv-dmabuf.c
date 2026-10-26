@@ -705,7 +705,8 @@ nv_dma_buf_unmap_pages(
         return;
     }
 
-    dma_unmap_sg_attrs(dev, sgt->sgl, sgt->nents,
+    // Unmap takes the count passed to dma_map_sg_attrs(), not the one it returned
+    dma_unmap_sg_attrs(dev, sgt->sgl, sgt->orig_nents,
                        DMA_BIDIRECTIONAL, DMA_ATTR_SKIP_CPU_SYNC);
 }
 
