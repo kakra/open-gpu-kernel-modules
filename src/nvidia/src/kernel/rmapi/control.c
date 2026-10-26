@@ -42,6 +42,7 @@
 #include "ctrl/ctrl0000/ctrl0000gpuacct.h" // NV0000_CTRL_CMD_GPUACCT_*
 #include "ctrl/ctrl2080/ctrl2080tmr.h" // NV2080_CTRL_CMD_TIMER_SCHEDULE
 #include "ctrl/ctrl2080/ctrl2080fb.h" // NV2080_CTRL_CMD_FB_GET_MEM_ALIGNMENT
+#include "ctrl/ctrl0041.h" // NV0041_CTRL_CMD_GET_SURFACE_INFO
 
 static NV_STATUS
 releaseDeferRmCtrlBuffer(RmCtrlDeferredCmd* pRmCtrlDeferredCmd)
@@ -956,6 +957,21 @@ serverControlLookupLockFlags
         }
 
         if (controlFlags & RMCTRL_FLAGS_API_LOCK_READONLY)
+        {
+            *pAccess = LOCK_ACCESS_READ;
+        }
+
+        //
+        // GET_SURFACE_INFO only reads the Memory object's descriptor and HW
+        // resource attributes, which are fixed once the memory is allocated.
+        // Frees, allocs, dups and maps take the API lock for write, and the
+        // control still takes the client lock (write) and the GPU lock, so
+        // a READ API lock is enough. nvidia-modeset calls it while registering
+        // every framebuffer; with the WRITE lock that waited for every other
+        // client's READ-locked control (e.g. a PERF_BOOST GSP RPC when an app
+        // starts), stalling the compositor.
+        //
+        if (pRmCtrlParams->cmd == NV0041_CTRL_CMD_GET_SURFACE_INFO)
         {
             *pAccess = LOCK_ACCESS_READ;
         }
