@@ -2996,6 +2996,14 @@ typedef struct {
 #endif
 
     struct NvKmsPerOpen *nvKmsPerOpen;
+
+    /*
+     * Number of deferred request FIFOs and headSurface channels, on all
+     * devices: the things nvKmsServiceNonStallInterrupt() services. Changed
+     * with the global NVKMS lock held; NonStallInterruptCallback() reads it
+     * without the lock.
+     */
+    NvU32 nonStallWorkCount;
 } NVEvoGlobal;
 
 extern NVEvoGlobal nvEvoGlobal;

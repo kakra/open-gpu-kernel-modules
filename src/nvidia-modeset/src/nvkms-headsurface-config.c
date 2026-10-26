@@ -2284,6 +2284,8 @@ void nvHsConfigStart(
                 (pHsConfigOneHead->pHsChannel == NULL)) {
                 nvHsFreeChannel(pDispEvo->pHsChannel[apiHead]);
                 pDispEvo->pHsChannel[apiHead] = NULL;
+                nvAssert(nvEvoGlobal.nonStallWorkCount > 0);
+                nvEvoGlobal.nonStallWorkCount--;
                 continue;
             }
 
@@ -2294,6 +2296,8 @@ void nvHsConfigStart(
             nvAssert(pDispEvo->pHsChannel[apiHead] == NULL);
             pDispEvo->pHsChannel[apiHead] = pHsConfigOneHead->pHsChannel;
             pHsConfigOneHead->pHsChannel = NULL;
+            /* See NonStallInterruptCallback(). */
+            nvEvoGlobal.nonStallWorkCount++;
         }
     }
 

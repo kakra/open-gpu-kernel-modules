@@ -4321,7 +4321,19 @@ static void NonStallInterruptCallback(
      * XXX It might be nice to use a lighter-weight lock here to check if any
      * requests are pending in any NvKmsDeferredRequestFifo before scheduling
      * nvKmsServiceNonStallInterrupt().
+     *
+     * Non-stall interrupts come with every semaphore release that requests
+     * one, e.g. for each fence of every GPU client, so this would wake the
+     * NVKMS worker and take the nvkms_lock for each of them (thousands per
+     * second under load). nvKmsServiceNonStallInterrupt() only services
+     * deferred request FIFOs and headSurface channels; skip it while none
+     * exist. The count is read without the lock: it changes with the lock
+     * held, before the client can use a new FIFO or headSurface renders, so
+     * any interrupt they cause sees it non-zero.
      */
+    if (*(volatile const NvU32 *)&nvEvoGlobal.nonStallWorkCount == 0) {
+        return;
+    }
 
     (void) nvkms_alloc_timer_with_ref_ptr(
         nvKmsServiceNonStallInterrupt, /* callback */
