@@ -484,7 +484,19 @@ memMap_IMPL
                 // Below, we only map one GPU's address for CPU access, so we can use UNICAST here
                 NvU32 busMapFbFlags = BUS_MAP_FB_FLAGS_MAP_UNICAST;
 #if defined(NV_UNIX)
-                busMapFbFlags |= pMapParams->bKernel ? 0 : BUS_MAP_FB_FLAGS_ALLOW_DISCONTIG;
+                //
+                // A discontiguous BAR1 mapping is only usable through the
+                // mmap path, which gets every range from the TLS mapping
+                // context. Kernel clients asking for a user-space mapping
+                // (nvidia-drm GEM mmap/vmap) get only the first range back
+                // and use it as one contiguous block, so a split mapping
+                // makes them access other BAR1 mappings or run past BAR1.
+                //
+                if (!pMapParams->bKernel &&
+                    (rmclientGetCachedPrivilege(pClient) < RS_PRIV_LEVEL_KERNEL))
+                {
+                    busMapFbFlags |= BUS_MAP_FB_FLAGS_ALLOW_DISCONTIG;
+                }
 #endif
                 if(DRF_VAL(OS33, _FLAGS, _MAPPING, pMapParams->flags) == NVOS33_FLAGS_MAPPING_DIRECT)
                 {
