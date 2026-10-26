@@ -3019,6 +3019,23 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_PCI_ENABLE_ATOMIC_OPS_TO_ROOT_PRESENT" "" "functions"
         ;;
 
+        dma_buf_map_attachment_unlocked)
+            #
+            # Determine if the function dma_buf_map_attachment_unlocked() is
+            # present.
+            #
+            # Added when dma_buf_map_attachment() started requiring the
+            # caller to hold the dma-buf's reservation lock.
+            #
+            CODE="
+            #include <linux/dma-buf.h>
+            void conftest_dma_buf_map_attachment_unlocked(void) {
+                dma_buf_map_attachment_unlocked();
+            }"
+
+            compile_check_conftest "$CODE" "NV_DMA_BUF_MAP_ATTACHMENT_UNLOCKED_PRESENT" "" "functions"
+        ;;
+
         drm_gem_object_put_unlocked)
             #
             # Determine if the function drm_gem_object_put_unlocked() is present.
