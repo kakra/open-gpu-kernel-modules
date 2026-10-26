@@ -157,11 +157,11 @@ static NV_STATUS semsurfCtrlCmdSetValue__EXPORT(void *pSemaphoreSurf, void *pPar
 }
 #endif // !NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x00000109u)
 
-#if !NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x00000109u)
+#if !NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x00400009u)
 static NV_STATUS semsurfCtrlCmdUnregisterWaiter__EXPORT(void *pSemaphoreSurf, void *pParams) {
     return semsurfCtrlCmdUnregisterWaiter_IMPL(pSemaphoreSurf, pParams);
 }
-#endif // !NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x00000109u)
+#endif // !NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x00400009u)
 
 // Exported method array
 static const struct NVOC_EXPORTED_METHOD_DEF __nvoc_exported_method_def_SemaphoreSurface[] = 
@@ -227,12 +227,12 @@ static const struct NVOC_EXPORTED_METHOD_DEF __nvoc_exported_method_def_Semaphor
 #endif
     },
     {               /*  [4] */
-#if NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x109u)
+#if NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x400009u)
         /*pFunc=*/      (void (*)(void)) NULL,
 #else
         /*pFunc=*/      (void (*)(void)) &semsurfCtrlCmdUnregisterWaiter__EXPORT,
-#endif // NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x109u)
-        /*flags=*/      0x109u,
+#endif // NVOC_EXPORTED_METHOD_DISABLED_BY_FLAG(0x400009u)
+        /*flags=*/      0x400009u,
         /*accessRight=*/0x0u,
         /*methodId=*/   0xda0005u,
         /*paramSize=*/  sizeof(NV_SEMAPHORE_SURFACE_CTRL_UNREGISTER_WAITER_PARAMS),

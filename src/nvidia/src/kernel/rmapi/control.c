@@ -600,10 +600,10 @@ _rmapiRmControl(NvHandle hClient, NvHandle hObject, NvU32 cmd, NvP64 pUserParams
         // With dynamic power management, rmapiPrologue() and rmapiEpilogue()
         // take the API lock (READ) to reference/unreference the GPUs, so even
         // a NO_API_LOCK control waits for every API lock writer (e.g. another
-        // process freeing a device, tens of ms). The only NO_API_LOCK control,
-        // the semaphore surface REGISTER_WAITER, works on sysmem semaphores and
-        // CPU-side waiter lists and doesn't need the GPU awake: skip the
-        // reference for it.
+        // process freeing a device, tens of ms). The only NO_API_LOCK controls,
+        // the semaphore surface REGISTER_WAITER and UNREGISTER_WAITER, work on
+        // sysmem semaphores and CPU-side waiter lists and don't need the GPU
+        // awake: skip the reference for them.
         //
         const NvBool bSkipGpuAccessRef = (getCtrlInfoStatus == NV_OK) &&
                                          ((ctrlFlags & RMCTRL_FLAGS_NO_API_LOCK) != 0);
