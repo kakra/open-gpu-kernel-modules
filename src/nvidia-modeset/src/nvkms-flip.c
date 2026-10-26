@@ -299,7 +299,18 @@ static void InitNvKmsFlipWorkArea(const NVDevEvoRec *pDevEvo,
     const NVDispEvoRec *pDispEvo;
     NvU32 sd, head, apiHead;
 
-    nvkms_memset(pWorkArea, 0, sizeof(*pWorkArea));
+    /*
+     * The work area is sized for NVKMS_MAX_SUBDEVICES, but only the entries
+     * of existing subdevices are used (flip requests are validated against
+     * numSubDevices). Zeroing all of it costs more than the rest of a flip
+     * validation on a single GPU.
+     */
+    nvkms_memset(pWorkArea->sd, 0,
+                 sizeof(pWorkArea->sd[0]) * pDevEvo->numSubDevices);
+    nvkms_memset(pWorkArea->disp, 0,
+                 sizeof(pWorkArea->disp[0]) * pDevEvo->numSubDevices);
+    nvkms_memset(&pWorkArea->updateState, 0,
+                 sizeof(pWorkArea->updateState));
 
     /*
      * Initialize the work area. Note we take two snapshots of the

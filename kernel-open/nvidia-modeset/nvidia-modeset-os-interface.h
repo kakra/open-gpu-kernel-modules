@@ -388,6 +388,8 @@ nvkms_sema_handle_t*
 void nvkms_sema_free     (nvkms_sema_handle_t *sema);
 void nvkms_sema_down     (nvkms_sema_handle_t *sema);
 void nvkms_sema_up       (nvkms_sema_handle_t *sema);
+/* Returns NV_TRUE if the semaphore was taken */
+NvBool nvkms_sema_trydown(nvkms_sema_handle_t *sema);
 
 /*!
  * APIs to register/unregister backlight device.

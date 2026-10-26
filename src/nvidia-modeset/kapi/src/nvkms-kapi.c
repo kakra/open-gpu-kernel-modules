@@ -691,6 +691,13 @@ done:
     return ret;
 }
 
+/* KmsFlip() request: the params plus one flip head per possible head */
+static size_t KmsFlipParamsSize(void)
+{
+    return sizeof(struct NvKmsFlipParams) +
+           sizeof(struct NvKmsFlipRequestOneHead) * NVKMS_KAPI_MAX_HEADS;
+}
+
 static void FreeDevice(struct NvKmsKapiDevice *device)
 {
     /* Free NVKMS objects allocated for NvKmsKapiDevice */
@@ -708,6 +715,12 @@ static void FreeDevice(struct NvKmsKapiDevice *device)
     if (device->pSema != NULL) {
         nvkms_sema_free(device->pSema);
     }
+
+    if (device->pFlipParamsSema != NULL) {
+        nvkms_sema_free(device->pFlipParamsSema);
+    }
+
+    nvKmsKapiFree(device->pFlipParams);
 
     nvKmsKapiFree(device);
 }
@@ -1012,6 +1025,12 @@ static struct NvKmsKapiDevice* AllocateDevice
             "Failed to allocate semaphore for NvKmsKapiDevice of GPU ID 0x%08x",
             params->gpuId);
         goto failed;
+    }
+
+    /* Optional: KmsFlip() allocates per call without it */
+    device->pFlipParamsSema = nvkms_sema_alloc();
+    if (device->pFlipParamsSema != NULL) {
+        device->pFlipParams = nvKmsKapiCalloc(1, KmsFlipParamsSize());
     }
 
     /* Raise the reference count of gpu. */
@@ -3683,12 +3702,19 @@ static NvBool KmsFlip(
     struct NvKmsFlipParams *params = NULL;
     struct NvKmsFlipRequestOneHead *pFlipHead = NULL;
     NvBool status = NV_TRUE;
+    NvBool preallocatedParams = NV_FALSE;
     NvU32 i, head;
 
     /* Allocate space for the params structure, plus space for each possible
      * head. */
-    params = nvKmsKapiCalloc(1,
-            sizeof(*params) + sizeof(pFlipHead[0]) * NVKMS_KAPI_MAX_HEADS);
+    if (device->pFlipParams != NULL &&
+        nvkms_sema_trydown(device->pFlipParamsSema)) {
+        params = device->pFlipParams;
+        nvkms_memset(params, 0, KmsFlipParamsSize());
+        preallocatedParams = NV_TRUE;
+    } else {
+        params = nvKmsKapiCalloc(1, KmsFlipParamsSize());
+    }
 
     if (params == NULL) {
         return NV_FALSE;
@@ -3889,7 +3915,11 @@ static NvBool KmsFlip(
 
 done:
 
-    nvKmsKapiFree(params);
+    if (preallocatedParams) {
+        nvkms_sema_up(device->pFlipParamsSema);
+    } else {
+        nvKmsKapiFree(params);
+    }
 
     return status;
 }
