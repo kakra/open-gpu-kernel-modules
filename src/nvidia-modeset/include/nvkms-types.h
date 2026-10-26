@@ -2855,6 +2855,16 @@ struct _NVSurfaceEvoRec {
     NvU64 gpuAddress;
 
     /*
+     * gpuAddress is only mapped (with gpuMapPermissions) the first time
+     * headSurface or DIFR needs it: read it through
+     * nvHsGetSurfaceGpuAddress(), which retries a failed mapping on the next
+     * call (gpuMapFailureLogged: the failure was logged once already).
+     */
+    NvBool gpuMapPending;
+    NvBool gpuMapFailureLogged;
+    enum NvHsMapPermissions gpuMapPermissions;
+
+    /*
      * HeadSurface needs a CPU mapping of surfaces containing semaphores.
      */
     void *cpuAddress[NVKMS_MAX_SUBDEVICES];

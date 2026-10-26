@@ -672,14 +672,26 @@ void nvEvoRegisterSurface(NVDevEvoPtr pDevEvo,
         hsMapPermissions = NvHsMapPermissionsReadWrite;
     }
 
-    pSurfaceEvo->gpuAddress = nvHsMapSurfaceToDevice(
-                    pDevEvo,
-                    pSurfaceEvo->planes[0].rmHandle,
-                    pRequest->planes[0].rmObjectSizeInBytes,
-                    hsMapPermissions);
+    if ((pDevEvo->pHsDevice != NULL) &&
+        (hsMapPermissions != NvHsMapPermissionsNone)) {
+        /*
+         * Mapping and unmapping each cost a GSP RPC under the global NVKMS
+         * lock, and only headSurface and DIFR ever use the mapping: do it
+         * in nvHsGetSurfaceGpuAddress() when they first need it.
+         */
+        pSurfaceEvo->gpuAddress = 0;
+        pSurfaceEvo->gpuMapPending = TRUE;
+        pSurfaceEvo->gpuMapPermissions = hsMapPermissions;
+    } else {
+        pSurfaceEvo->gpuAddress = nvHsMapSurfaceToDevice(
+                        pDevEvo,
+                        pSurfaceEvo->planes[0].rmHandle,
+                        pRequest->planes[0].rmObjectSizeInBytes,
+                        hsMapPermissions);
 
-    if (pSurfaceEvo->gpuAddress == NV_HS_BAD_GPU_ADDRESS) {
-        goto fail;
+        if (pSurfaceEvo->gpuAddress == NV_HS_BAD_GPU_ADDRESS) {
+            goto fail;
+        }
     }
 
     /*
