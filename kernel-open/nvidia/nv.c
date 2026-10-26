@@ -493,6 +493,47 @@ int nvos_free_alloc(
     return 0;
 }
 
+/*
+ * Uncached and write-combined system memory is switched back to write-back
+ * before it is freed. Each switch is a page attribute change with a TLB
+ * shootdown on every CPU (~200 us per allocation), and nv_free_pages() runs
+ * under the RM API lock, often in write mode when a client exits. Hand these
+ * frees to a worker instead.
+ */
+static LLIST_HEAD(nv_deferred_free_list);
+
+static void nv_deferred_free_worker(struct work_struct *work)
+{
+    struct llist_node *list = llist_del_all(&nv_deferred_free_list);
+    nv_alloc_t *at, *next;
+
+    llist_for_each_entry_safe(at, next, list, deferred_free_node)
+    {
+        if (at->flags.contig)
+            nv_free_contig_pages(at);
+        else
+            nv_free_system_pages(at);
+
+        nvos_free_alloc(at);
+    }
+}
+
+static DECLARE_WORK(nv_deferred_free_work, nv_deferred_free_worker);
+
+static NvBool nv_defer_free_pages(nv_alloc_t *at)
+{
+    if (at->cache_type == NV_MEMORY_CACHED ||
+        at->flags.unencrypted || at->flags.coherent)
+    {
+        return NV_FALSE;
+    }
+
+    if (llist_add(&at->deferred_free_node, &nv_deferred_free_list))
+        queue_work(system_unbound_wq, &nv_deferred_free_work);
+
+    return NV_TRUE;
+}
+
 static void
 nv_module_resources_exit(nv_stack_t *sp)
 {
@@ -585,6 +626,7 @@ nv_module_state_exit(nv_stack_t *sp)
     nv_kthread_q_stop(&nv_deferred_close_kthread_q);
     nv_kthread_q_stop(&nv_kthread_q);
 
+    flush_work(&nv_deferred_free_work);
     nv_destroy_page_pools();
 
     nv_lock_destroy_locks(sp, nv);
@@ -4236,6 +4278,9 @@ NV_STATUS NV_API_CALL nv_free_pages(
 
     if (!at->flags.guest && !at->import_sgt)
     {
+        if (nv_defer_free_pages(at))
+            return rmStatus;
+
         if (at->flags.contig)
             nv_free_contig_pages(at);
         else

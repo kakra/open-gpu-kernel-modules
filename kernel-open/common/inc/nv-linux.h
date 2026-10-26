@@ -170,6 +170,7 @@
 #include <linux/memory.h>
 
 #include <linux/workqueue.h>        /* workqueue                        */
+#include <linux/llist.h>            /* llist                            */
 #include "nv-kthread-q.h"           /* kthread based queue              */
 #include <linux/efi.h>              /* efi_enabled                      */
 #include <linux/fb.h>               /* fb_info struct                   */
@@ -943,6 +944,7 @@ typedef struct nv_alloc_s {
     struct sg_table *import_sgt;
     dma_addr_t     dma_handle;          /* dma handle used by dma_alloc_coherent(), dma_free_coherent() */
     nv_linux_mm_free_work_t *accounting_mm_work;
+    struct llist_node deferred_free_node; /* nv_free_pages() worker list */
 } nv_alloc_t;
 
 /**
