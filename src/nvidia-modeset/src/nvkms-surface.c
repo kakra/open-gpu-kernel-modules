@@ -1663,6 +1663,9 @@ NVDeferredRequestFifoRec *nvEvoRegisterDeferredRequestFifo(
 
     nvEvoIncrementSurfaceRefCnts(pSurfaceEvo);
 
+    /* Non-stall interrupts need servicing now; see NonStallInterruptCallback(). */
+    nvEvoGlobal.nonStallWorkCount++;
+
     return pDeferredRequestFifo;
 }
 
@@ -1675,6 +1678,9 @@ void nvEvoUnregisterDeferredRequestFifo(
 {
     nvAssert(pDeferredRequestFifo->fifo != NULL);
     nvAssert(pDeferredRequestFifo->pSurfaceEvo != NULL);
+
+    nvAssert(nvEvoGlobal.nonStallWorkCount > 0);
+    nvEvoGlobal.nonStallWorkCount--;
 
     nvHsLeaveSwapGroup(pDevEvo, pDeferredRequestFifo, FALSE /* teardown */);
 
