@@ -1882,6 +1882,41 @@ nv_dma_buf_export(
 #endif // CONFIG_DMA_SHARED_BUFFER
 }
 
+#if defined(CONFIG_DMA_SHARED_BUFFER)
+//
+// dma_buf_map_attachment() and dma_buf_unmap_attachment() require the
+// reservation lock since it became the dma-buf locking rule; the unlocked
+// variants take it. Exporters that pin or migrate the buffer on map rely
+// on it.
+//
+static struct sg_table *
+nv_dma_buf_map_attachment_unlocked(
+    struct dma_buf_attachment *attach,
+    enum dma_data_direction direction
+)
+{
+#if defined(NV_DMA_BUF_MAP_ATTACHMENT_UNLOCKED_PRESENT)
+    return dma_buf_map_attachment_unlocked(attach, direction);
+#else
+    return dma_buf_map_attachment(attach, direction);
+#endif
+}
+
+static void
+nv_dma_buf_unmap_attachment_unlocked(
+    struct dma_buf_attachment *attach,
+    struct sg_table *sgt,
+    enum dma_data_direction direction
+)
+{
+#if defined(NV_DMA_BUF_MAP_ATTACHMENT_UNLOCKED_PRESENT)
+    dma_buf_unmap_attachment_unlocked(attach, sgt, direction);
+#else
+    dma_buf_unmap_attachment(attach, sgt, direction);
+#endif
+}
+#endif // CONFIG_DMA_SHARED_BUFFER
+
 NV_STATUS NV_API_CALL nv_dma_import_dma_buf
 (
     nv_dma_device_t *dma_dev,
@@ -1938,7 +1973,7 @@ NV_STATUS NV_API_CALL nv_dma_import_dma_buf
         nv_dma_buf->direction = DMA_BIDIRECTIONAL;
     }
 
-    map_sgt = dma_buf_map_attachment(dma_attach, nv_dma_buf->direction);
+    map_sgt = nv_dma_buf_map_attachment_unlocked(dma_attach, nv_dma_buf->direction);
     if (IS_ERR_OR_NULL(map_sgt))
     {
         nv_printf(NV_DBG_ERRORS, "Can't map dma attachment!\n");
@@ -2014,8 +2049,8 @@ void NV_API_CALL nv_dma_release_dma_buf
     }
 
     nv_dma_buf = (nv_dma_buf_t *)import_priv;
-    dma_buf_unmap_attachment(nv_dma_buf->dma_attach, nv_dma_buf->sgt,
-                             nv_dma_buf->direction);
+    nv_dma_buf_unmap_attachment_unlocked(nv_dma_buf->dma_attach, nv_dma_buf->sgt,
+                                         nv_dma_buf->direction);
     dma_buf_detach(nv_dma_buf->dma_buf, nv_dma_buf->dma_attach);
     dma_buf_put(nv_dma_buf->dma_buf);
 
