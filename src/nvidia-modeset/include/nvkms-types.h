@@ -1014,6 +1014,14 @@ typedef struct _NVEvoDevRec {
 
     NVUnixRmHandleAllocatorRec handleAllocator;
 
+    /*
+     * Incremented whenever the surface descriptors of all registered surfaces
+     * are freed or the core channel is freed. Surface registration that binds
+     * a descriptor without the global NVKMS lock (see nvEvoRegisterSurface())
+     * redoes the bind if this changed in the meantime.
+     */
+    NvU32 surfaceDescGeneration;
+
     struct NvKmsDeviceId deviceId;
 
     /* MIG subscription state for SMG support */

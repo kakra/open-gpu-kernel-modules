@@ -1657,6 +1657,16 @@ NvBool nvkms_ioctl_from_kapi
  * APIs for locking.
  *************************************************************************/
 
+void nvkms_drop_global_lock(void)
+{
+    up(&nvkms_lock);
+}
+
+void nvkms_retake_global_lock(void)
+{
+    down(&nvkms_lock);
+}
+
 struct nvkms_sema_t {
     struct semaphore os_sema;
 };

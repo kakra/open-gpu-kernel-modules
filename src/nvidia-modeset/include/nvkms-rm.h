@@ -157,6 +157,17 @@ NvU32 nvRmAllocAndBindSurfaceDescriptor(
     NVSurfaceDescriptor *pSurfaceDesc,
     NvBool mapToDisplayRm);
 
+NvBool nvRmCanAllocSurfaceDescriptorUnlocked(const NVDevEvoRec *pDevEvo);
+
+NvU32 nvRmAllocAndBindSurfaceDescriptorUnlocked(
+    NvU32 hDevice,
+    NvU32 hCoreChannel,
+    NvU32 hCtxDma,
+    NvU32 hMemory,
+    const enum NvKmsSurfaceMemoryLayout layout,
+    NvU64 limit,
+    NVSurfaceDescriptor *pSurfaceDesc);
+
 #ifdef __cplusplus
 };
 #endif

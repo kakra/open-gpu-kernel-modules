@@ -27,5 +27,6 @@
 #include "nvkms-types.h"
 
 enum NvKmsAllocDeviceStatus nvAssignEvoCaps(NVDevEvoPtr pDevEvo);
+NvBool nvEvoHalUsesCtxDmaSurfaceDescriptors(const NVDevEvoRec *pDevEvo);
 
 #endif /* __NVKMS_HAL_H__ */

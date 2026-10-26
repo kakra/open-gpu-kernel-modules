@@ -29,6 +29,7 @@
 #include "nvkms-private.h"
 #include "nvkms-headsurface.h"
 #include "nvkms-headsurface-swapgroup.h"
+#include "nvkms-hal.h"
 #include "nvos.h"
 
 // NV0000_CTRL_CMD_OS_UNIX_IMPORT_OBJECT_FROM_FD
@@ -112,7 +113,77 @@ static void FreeSurfaceEvoStruct(NVSurfaceEvoPtr pSurfaceEvo)
     nvFree(pSurfaceEvo);
 }
 
-static void FreeSurfaceEvoRm(NVDevEvoPtr pDevEvo, NVSurfaceEvoPtr pSurfaceEvo)
+/*
+ * RM objects of a surface that FreeSurfaceEvoRm() left for
+ * FreeSurfaceRmObjectsUnlocked() to free.
+ */
+typedef struct {
+    NvU32 ctxDmaHandle[NVKMS_MAX_PLANES_PER_SURFACE];
+    NvU32 rmHandle[NVKMS_MAX_PLANES_PER_SURFACE];
+} NVSurfaceRmObjects;
+
+/*!
+ * Free the context DMAs and memory objects collected in pRmObjects with RM
+ * calls made without the global NVKMS lock, then release their handles.
+ *
+ * Must be called with the global NVKMS lock held, from an ioctl of a
+ * kernel-space client (see nvkms_drop_global_lock()). Nothing in NVKMS
+ * references the objects anymore.
+ */
+static void FreeSurfaceRmObjectsUnlocked(NVDevEvoPtr pDevEvo,
+                                         const NVSurfaceRmObjects *pRmObjects)
+{
+    const NvU32 hDevice = pDevEvo->deviceHandle;
+    NvBool haveObjects = FALSE;
+    NvU8 planeIndex;
+
+    for (planeIndex = 0; planeIndex < NVKMS_MAX_PLANES_PER_SURFACE; planeIndex++) {
+        if ((pRmObjects->ctxDmaHandle[planeIndex] != 0) ||
+            (pRmObjects->rmHandle[planeIndex] != 0)) {
+            haveObjects = TRUE;
+        }
+    }
+
+    if (!haveObjects) {
+        return;
+    }
+
+    nvkms_drop_global_lock();
+
+    for (planeIndex = 0; planeIndex < NVKMS_MAX_PLANES_PER_SURFACE; planeIndex++) {
+        if (pRmObjects->ctxDmaHandle[planeIndex] != 0) {
+            nvRmApiFree(nvEvoGlobal.clientHandle, hDevice,
+                        pRmObjects->ctxDmaHandle[planeIndex]);
+        }
+    }
+    for (planeIndex = 0; planeIndex < NVKMS_MAX_PLANES_PER_SURFACE; planeIndex++) {
+        if (pRmObjects->rmHandle[planeIndex] != 0) {
+            nvRmApiFree(nvEvoGlobal.clientHandle, hDevice,
+                        pRmObjects->rmHandle[planeIndex]);
+        }
+    }
+
+    nvkms_retake_global_lock();
+
+    for (planeIndex = 0; planeIndex < NVKMS_MAX_PLANES_PER_SURFACE; planeIndex++) {
+        if (pRmObjects->ctxDmaHandle[planeIndex] != 0) {
+            nvFreeUnixRmHandle(&pDevEvo->handleAllocator,
+                               pRmObjects->ctxDmaHandle[planeIndex]);
+        }
+        if (pRmObjects->rmHandle[planeIndex] != 0) {
+            nvFreeUnixRmHandle(&pDevEvo->handleAllocator,
+                               pRmObjects->rmHandle[planeIndex]);
+        }
+    }
+}
+
+/*!
+ * Free the RM objects of a surface. If pDeferred isn't NULL and the surface
+ * descriptors are plain context DMAs, the context DMAs and memory objects
+ * aren't freed but moved to *pDeferred, for FreeSurfaceRmObjectsUnlocked().
+ */
+static void FreeSurfaceEvoRm(NVDevEvoPtr pDevEvo, NVSurfaceEvoPtr pSurfaceEvo,
+                             NVSurfaceRmObjects *pDeferred)
 {
     NvU64 structRefCnt;
     NvU8 planeIndex;
@@ -123,7 +194,20 @@ static void FreeSurfaceEvoRm(NVDevEvoPtr pDevEvo, NVSurfaceEvoPtr pSurfaceEvo)
 
     nvAssert(pSurfaceEvo->rmRefCnt == 0);
 
+    if ((pDeferred != NULL) &&
+        (!nvEvoHalUsesCtxDmaSurfaceDescriptors(pDevEvo) ||
+         pSurfaceEvo->mapToDisplayRm)) {
+        pDeferred = NULL;
+    }
+
     FOR_ALL_VALID_PLANES(planeIndex, pSurfaceEvo) {
+        if (pDeferred != NULL) {
+            pDeferred->ctxDmaHandle[planeIndex] =
+                pSurfaceEvo->planes[planeIndex].surfaceDesc.ctxDmaHandle;
+            pSurfaceEvo->planes[planeIndex].surfaceDesc.ctxDmaHandle = 0;
+            continue;
+        }
+
         pDevEvo->hal->FreeSurfaceDescriptor(pDevEvo,
                                             nvEvoGlobal.clientHandle,
                                             &pSurfaceEvo->planes[planeIndex].surfaceDesc);
@@ -141,6 +225,13 @@ static void FreeSurfaceEvoRm(NVDevEvoPtr pDevEvo, NVSurfaceEvoPtr pSurfaceEvo)
 
         if (pSurfaceEvo->planes[planeIndex].rmHandle == 0) {
             break;
+        }
+
+        if (pDeferred != NULL) {
+            pDeferred->rmHandle[planeIndex] =
+                pSurfaceEvo->planes[planeIndex].rmHandle;
+            pSurfaceEvo->planes[planeIndex].rmHandle = 0;
+            continue;
         }
 
         nvRmApiFree(nvEvoGlobal.clientHandle,
@@ -452,10 +543,152 @@ static NvBool ValidateSurfaceAllocation(
     return TRUE;
 }
 
-void nvEvoRegisterSurface(NVDevEvoPtr pDevEvo,
-                          struct NvKmsPerOpenDev *pOpenDev,
-                          struct NvKmsRegisterSurfaceParams *pParams,
-                          enum NvHsMapPermissions hsMapPermissions)
+/*!
+ * The per-plane RM work of surface registration (dup the memory object,
+ * check it, allocate the surface descriptor and bind it to the core channel)
+ * with RM calls made without the global NVKMS lock, for
+ * nvEvoRegisterSurfaceUnlockedRm().
+ *
+ * Called and returns with the lock held. The handles are reserved before
+ * dropping the lock; pSurfaceEvo isn't reachable by anyone else until the
+ * caller publishes it. If the core channel or all surface descriptors were
+ * freed while the lock was dropped (surfaceDescGeneration changed), the
+ * descriptors are allocated and bound again with the lock held.
+ *
+ * On failure, the caller frees the RM objects stored in pSurfaceEvo.
+ */
+static NvBool RegisterSurfacePlanesUnlockedRm(
+    NVDevEvoPtr pDevEvo,
+    const struct NvKmsRegisterSurfaceRequest *pRequest,
+    NVSurfaceEvoPtr pSurfaceEvo)
+{
+    NvU32 ctxDmaHandle[NVKMS_MAX_PLANES_PER_SURFACE] = { };
+    const NvBool needDescriptor = !pRequest->noDisplayHardwareAccess;
+    const NvU32 hDevice = pDevEvo->deviceHandle;
+    const NvU32 hCoreChannel = pDevEvo->core->pb.channel_handle;
+    const NvU32 generation = pDevEvo->surfaceDescGeneration;
+    NvBool ok = TRUE;
+    NvU8 planeIndex;
+
+    FOR_ALL_VALID_PLANES(planeIndex, pSurfaceEvo) {
+        pSurfaceEvo->planes[planeIndex].rmHandle =
+            nvGenerateUnixRmHandle(&pDevEvo->handleAllocator);
+        if (pSurfaceEvo->planes[planeIndex].rmHandle == 0) {
+            ok = FALSE;
+            break;
+        }
+
+        if (needDescriptor) {
+            ctxDmaHandle[planeIndex] =
+                nvGenerateUnixRmHandle(&pDevEvo->handleAllocator);
+            if (ctxDmaHandle[planeIndex] == 0) {
+                ok = FALSE;
+                break;
+            }
+        }
+    }
+
+    if (ok) {
+        nvkms_drop_global_lock();
+
+        FOR_ALL_VALID_PLANES(planeIndex, pSurfaceEvo) {
+            const NvU32 hMemory = pSurfaceEvo->planes[planeIndex].rmHandle;
+            const NvU64 sizeInBytes =
+                pRequest->planes[planeIndex].rmObjectSizeInBytes;
+
+            if (nvRmApiDupObject(nvEvoGlobal.clientHandle,
+                                 hDevice,
+                                 hMemory,
+                                 pRequest->rmClient,
+                                 pRequest->planes[planeIndex].u.rmObject,
+                                 0) != NVOS_STATUS_SUCCESS) {
+                ok = FALSE;
+                break;
+            }
+
+            if (!ValidateSurfaceAllocation(pDevEvo, sizeInBytes, pRequest,
+                                           hMemory)) {
+                ok = FALSE;
+                break;
+            }
+
+            if (needDescriptor &&
+                (nvRmAllocAndBindSurfaceDescriptorUnlocked(
+                    hDevice,
+                    hCoreChannel,
+                    ctxDmaHandle[planeIndex],
+                    hMemory,
+                    pRequest->layout,
+                    sizeInBytes - 1,
+                    &pSurfaceEvo->planes[planeIndex].surfaceDesc) !=
+                 NVOS_STATUS_SUCCESS)) {
+                ok = FALSE;
+                break;
+            }
+        }
+
+        nvkms_retake_global_lock();
+    }
+
+    /*
+     * Release the reserved context DMA handles that didn't end up in a
+     * descriptor (if the context DMA was allocated, the descriptor owns it).
+     */
+    FOR_ALL_VALID_PLANES(planeIndex, pSurfaceEvo) {
+        if ((ctxDmaHandle[planeIndex] != 0) &&
+            (pSurfaceEvo->planes[planeIndex].surfaceDesc.ctxDmaHandle !=
+             ctxDmaHandle[planeIndex])) {
+            nvFreeUnixRmHandle(&pDevEvo->handleAllocator,
+                               ctxDmaHandle[planeIndex]);
+        }
+    }
+
+    if (!ok) {
+        return FALSE;
+    }
+
+    if (needDescriptor &&
+        (pDevEvo->surfaceDescGeneration != generation)) {
+        FOR_ALL_VALID_PLANES(planeIndex, pSurfaceEvo) {
+            pDevEvo->hal->FreeSurfaceDescriptor(pDevEvo,
+                                                nvEvoGlobal.clientHandle,
+                                                &pSurfaceEvo->planes[planeIndex].surfaceDesc);
+        }
+
+        if (pDevEvo->core == NULL) {
+            return FALSE;
+        }
+
+        FOR_ALL_VALID_PLANES(planeIndex, pSurfaceEvo) {
+            if (nvRmAllocAndBindSurfaceDescriptor(
+                    pDevEvo,
+                    pSurfaceEvo->planes[planeIndex].rmHandle,
+                    pRequest->layout,
+                    pRequest->planes[planeIndex].rmObjectSizeInBytes - 1,
+                    &pSurfaceEvo->planes[planeIndex].surfaceDesc,
+                    FALSE /* mapToDisplayRm */) != NVOS_STATUS_SUCCESS) {
+                return FALSE;
+            }
+        }
+    }
+
+    FOR_ALL_VALID_PLANES(planeIndex, pSurfaceEvo) {
+        pSurfaceEvo->planes[planeIndex].pitch =
+                            pRequest->planes[planeIndex].pitch;
+        pSurfaceEvo->planes[planeIndex].offset =
+                            pRequest->planes[planeIndex].offset;
+        pSurfaceEvo->planes[planeIndex].rmObjectSizeInBytes =
+                            pRequest->planes[planeIndex].rmObjectSizeInBytes;
+    }
+
+    return TRUE;
+}
+
+static void RegisterSurface(NVDevEvoPtr pDevEvo,
+                            struct NvKmsPerOpenDev *pOpenDev,
+                            struct NvKmsRegisterSurfaceParams *pParams,
+                            enum NvHsMapPermissions hsMapPermissions,
+                            NvBool unlockedRm)
 {
     NVEvoApiHandlesRec *pOpenDevSurfaceHandles =
         nvGetSurfaceHandlesFromOpenDev(pOpenDev);
@@ -486,10 +719,15 @@ void nvEvoRegisterSurface(NVDevEvoPtr pDevEvo,
 
     pSurfaceEvo->format = pRequest->format;
 
-    surfaceHandle = nvEvoCreateApiHandle(pOpenDevSurfaceHandles, pSurfaceEvo);
+    if (unlockedRm &&
+        !pRequest->useFd &&
+        nvRmCanAllocSurfaceDescriptorUnlocked(pDevEvo)) {
 
-    if (surfaceHandle == 0) {
-        goto fail;
+        if (!RegisterSurfacePlanesUnlockedRm(pDevEvo, pRequest, pSurfaceEvo)) {
+            goto fail;
+        }
+
+        goto planes_done;
     }
 
     FOR_ALL_VALID_PLANES(planeIndex, pSurfaceEvo) {
@@ -656,6 +894,7 @@ void nvEvoRegisterSurface(NVDevEvoPtr pDevEvo,
                             pRequest->planes[planeIndex].rmObjectSizeInBytes;
     }
 
+planes_done:
     pSurfaceEvo->requireDisplayHardwareAccess = !pRequest->noDisplayHardwareAccess;
     pSurfaceEvo->noDisplayCaching = pRequest->noDisplayCaching;
 
@@ -714,6 +953,16 @@ void nvEvoRegisterSurface(NVDevEvoPtr pDevEvo,
     pSurfaceEvo->log2GobsPerBlockY    = pRequest->log2GobsPerBlockY;
     pSurfaceEvo->isoType              = pRequest->isoType;
 
+    /*
+     * Publish the surface only now: with unlockedRm, the global NVKMS lock was
+     * dropped while it was incomplete.
+     */
+    surfaceHandle = nvEvoCreateApiHandle(pOpenDevSurfaceHandles, pSurfaceEvo);
+
+    if (surfaceHandle == 0) {
+        goto fail;
+    }
+
     pSurfaceEvo->rmRefCnt = 1;
     pSurfaceEvo->structRefCnt = 1;
 
@@ -727,9 +976,39 @@ void nvEvoRegisterSurface(NVDevEvoPtr pDevEvo,
 fail:
     nvEvoDestroyApiHandle(pOpenDevSurfaceHandles, surfaceHandle);
 
-    FreeSurfaceEvoRm(pDevEvo, pSurfaceEvo);
+    FreeSurfaceEvoRm(pDevEvo, pSurfaceEvo, NULL /* pDeferred */);
     FreeSurfaceEvoStruct(pSurfaceEvo);
 }
+
+void nvEvoRegisterSurface(NVDevEvoPtr pDevEvo,
+                          struct NvKmsPerOpenDev *pOpenDev,
+                          struct NvKmsRegisterSurfaceParams *pParams,
+                          enum NvHsMapPermissions hsMapPermissions)
+{
+    RegisterSurface(pDevEvo, pOpenDev, pParams, hsMapPermissions,
+                    FALSE /* unlockedRm */);
+}
+
+/*!
+ * nvEvoRegisterSurface() for an ioctl from a kernel-space client: where
+ * possible, make the RM calls that dup and check the memory and allocate and
+ * bind the surface descriptors without the global NVKMS lock (they can wait
+ * milliseconds for RM locks held by other RM clients, which would stall vblank
+ * and flip handling).
+ */
+void nvEvoRegisterSurfaceUnlockedRm(NVDevEvoPtr pDevEvo,
+                                    struct NvKmsPerOpenDev *pOpenDev,
+                                    struct NvKmsRegisterSurfaceParams *pParams,
+                                    enum NvHsMapPermissions hsMapPermissions)
+{
+    RegisterSurface(pDevEvo, pOpenDev, pParams, hsMapPermissions,
+                    TRUE /* unlockedRm */);
+}
+
+static void DecrementSurfaceRefCnts(NVDevEvoPtr pDevEvo,
+                                    NVSurfaceEvoPtr pSurfaceEvo,
+                                    NvBool skipSync,
+                                    NVSurfaceRmObjects *pDeferred);
 
 /* Temporary storage used by ClearSurfaceUsage{Collect,Apply}. */
 struct ClearSurfaceUsageCache {
@@ -1096,14 +1375,16 @@ void nvEvoFreeClientSurfaces(NVDevEvoPtr pDevEvo,
 
 }
 
-void nvEvoUnregisterSurface(NVDevEvoPtr pDevEvo,
-                            struct NvKmsPerOpenDev *pOpenDev,
-                            NvKmsSurfaceHandle surfaceHandle,
-                            NvBool skipUpdate,
-                            NvBool skipSync)
+static void UnregisterSurface(NVDevEvoPtr pDevEvo,
+                              struct NvKmsPerOpenDev *pOpenDev,
+                              NvKmsSurfaceHandle surfaceHandle,
+                              NvBool skipUpdate,
+                              NvBool skipSync,
+                              NvBool unlockedRm)
 {
     NVEvoApiHandlesRec *pOpenDevSurfaceHandles =
         nvGetSurfaceHandlesFromOpenDev(pOpenDev);
+    NVSurfaceRmObjects rmObjects = { };
     NVSurfaceEvoPtr pSurfaceEvo;
 
     pSurfaceEvo = nvEvoGetPointerFromApiHandle(pOpenDevSurfaceHandles,
@@ -1134,7 +1415,38 @@ void nvEvoUnregisterSurface(NVDevEvoPtr pDevEvo,
     /* Remove the handle from the calling client's namespace. */
     nvEvoDestroyApiHandle(pOpenDevSurfaceHandles, surfaceHandle);
 
-    nvEvoDecrementSurfaceRefCntsWithSync(pDevEvo, pSurfaceEvo, skipSync);
+    DecrementSurfaceRefCnts(pDevEvo, pSurfaceEvo, skipSync,
+                            unlockedRm ? &rmObjects : NULL);
+
+    if (unlockedRm) {
+        FreeSurfaceRmObjectsUnlocked(pDevEvo, &rmObjects);
+    }
+}
+
+void nvEvoUnregisterSurface(NVDevEvoPtr pDevEvo,
+                            struct NvKmsPerOpenDev *pOpenDev,
+                            NvKmsSurfaceHandle surfaceHandle,
+                            NvBool skipUpdate,
+                            NvBool skipSync)
+{
+    UnregisterSurface(pDevEvo, pOpenDev, surfaceHandle, skipUpdate, skipSync,
+                      FALSE /* unlockedRm */);
+}
+
+/*!
+ * nvEvoUnregisterSurface() for an ioctl from a kernel-space client: if the
+ * surface's RM objects get freed, free them without the global NVKMS lock
+ * (the RM calls can wait milliseconds for RM locks held by other RM clients,
+ * which would stall vblank and flip handling).
+ */
+void nvEvoUnregisterSurfaceUnlockedRm(NVDevEvoPtr pDevEvo,
+                                      struct NvKmsPerOpenDev *pOpenDev,
+                                      NvKmsSurfaceHandle surfaceHandle,
+                                      NvBool skipUpdate,
+                                      NvBool skipSync)
+{
+    UnregisterSurface(pDevEvo, pOpenDev, surfaceHandle, skipUpdate, skipSync,
+                      TRUE /* unlockedRm */);
 }
 
 void nvEvoReleaseSurface(NVDevEvoPtr pDevEvo,
@@ -1178,9 +1490,10 @@ void nvEvoDecrementSurfaceRefCnts(NVDevEvoPtr pDevEvo,
     nvEvoDecrementSurfaceRefCntsWithSync(pDevEvo, pSurfaceEvo, NV_FALSE);
 }
 
-void nvEvoDecrementSurfaceRefCntsWithSync(NVDevEvoPtr pDevEvo,
-                                          NVSurfaceEvoPtr pSurfaceEvo,
-                                          NvBool skipSync)
+static void DecrementSurfaceRefCnts(NVDevEvoPtr pDevEvo,
+                                    NVSurfaceEvoPtr pSurfaceEvo,
+                                    NvBool skipSync,
+                                    NVSurfaceRmObjects *pDeferred)
 {
     nvAssert(pSurfaceEvo->rmRefCnt >= 1);
     pSurfaceEvo->rmRefCnt--;
@@ -1197,10 +1510,18 @@ void nvEvoDecrementSurfaceRefCntsWithSync(NVDevEvoPtr pDevEvo,
             nvEvoClearSurfaceUsage(pDevEvo, pSurfaceEvo, skipSync);
         }
 
-        FreeSurfaceEvoRm(pDevEvo, pSurfaceEvo);
+        FreeSurfaceEvoRm(pDevEvo, pSurfaceEvo, pDeferred);
     }
 
     nvEvoDecrementSurfaceStructRefCnt(pSurfaceEvo);
+}
+
+void nvEvoDecrementSurfaceRefCntsWithSync(NVDevEvoPtr pDevEvo,
+                                          NVSurfaceEvoPtr pSurfaceEvo,
+                                          NvBool skipSync)
+{
+    DecrementSurfaceRefCnts(pDevEvo, pSurfaceEvo, skipSync,
+                            NULL /* pDeferred */);
 }
 
 NvBool nvEvoSurfaceRefCntsTooLarge(const NVSurfaceEvoRec *pSurfaceEvo)
