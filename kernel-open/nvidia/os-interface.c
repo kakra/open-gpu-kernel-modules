@@ -1523,6 +1523,16 @@ NvBool NV_API_CALL os_is_vgx_hyper(void)
 #endif
 }
 
+static atomic_t rg_sem_skipped_count = ATOMIC_INIT(0);
+
+void NV_API_CALL os_log_rg_sem_skipped(NvU32 headMask)
+{
+    int count = atomic_inc_return(&rg_sem_skipped_count);
+
+    printk_ratelimited(KERN_INFO "NVRM: cleared display RG_SEM_SKIPPED error "
+                       "(head mask 0x%x, %d since load)\n", headMask, count);
+}
+
 NV_STATUS NV_API_CALL os_inject_vgx_msi(NvU16 guestID, NvU64 msiAddr, NvU32 msiData)
 {
 #if defined(NV_VGX_HYPER) && defined(NV_DOM0_KERNEL_PRESENT) && \
