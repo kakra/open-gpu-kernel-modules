@@ -1298,18 +1298,19 @@ static int nvkms_update_backlight_status(struct backlight_device *bd)
 {
     struct nvkms_backlight_device *nvkms_bd = bl_get_data(bd);
     NvBool status;
-    int ret;
 
-    ret = down_interruptible(&nvkms_lock);
-
-    if (ret != 0) {
-        return ret;
-    }
-
+    /*
+     * nvKmsSetBacklight() and nvKmsGetBacklight() only make an RM control
+     * call on the display's RM objects and don't touch NVKMS state, so they
+     * run without nvkms_lock (the RM call is a GSP RPC that can take
+     * milliseconds). The backlight core calls them with
+     * bd->ops_lock held, and nvkms_unregister_backlight() takes ops_lock
+     * before NVKMS frees the display, which keeps drv_priv valid here.
+     * Taking nvkms_lock here can also deadlock against
+     * nvkms_unregister_backlight(), which runs with nvkms_lock held.
+     */
     status = nvKmsSetBacklight(nvkms_bd->display_id, nvkms_bd->drv_priv,
                                bd->props.brightness);
-
-    up(&nvkms_lock);
 
     return status ? 0 : -EINVAL;
 }
@@ -1319,18 +1320,10 @@ static int nvkms_get_backlight_brightness(struct backlight_device *bd)
     struct nvkms_backlight_device *nvkms_bd = bl_get_data(bd);
     NvU32 brightness = 0;
     NvBool status;
-    int ret;
 
-    ret = down_interruptible(&nvkms_lock);
-
-    if (ret != 0) {
-        return ret;
-    }
-
+    /* No nvkms_lock, see nvkms_update_backlight_status(). */
     status = nvKmsGetBacklight(nvkms_bd->display_id, nvkms_bd->drv_priv,
                                &brightness);
-
-    up(&nvkms_lock);
 
     return  status ? brightness : -1;
 }
