@@ -38,19 +38,6 @@
 #include "ctrl/ctrlc370/ctrlc370event.h"
 #include "gpu/disp/kern_disp.h"
 #include "gpu/disp/head/kernel_head.h"
-#include "os-interface.h" // os_log_rg_sem_skipped
-
-/* From the v04_01/v04_02 display manuals; not in the published v04_01 excerpt. */
-#ifndef NV_PDISP_FE_EVT_STAT_ERROR_DISP
-#define NV_PDISP_FE_EVT_STAT_ERROR_DISP                         0x00611848 /* RW-4R */
-#define NV_PDISP_FE_EVT_STAT_ERROR_DISP_RG_SEM_SKIPPED               26:26 /* RWIVF */
-#define NV_PDISP_FE_EVT_STAT_ERROR_DISP_RG_SEM_SKIPPED_PENDING  0x00000001 /* R---V */
-#define NV_PDISP_FE_EVT_STAT_ERROR_DISP_RG_SEM_SKIPPED_RESET    0x00000001 /* -W--V */
-#endif
-#ifndef NV_PDISP_FE_HEAD_SEM_DEBUG
-#define NV_PDISP_FE_HEAD_SEM_DEBUG(i)              (0x00612080+(i)*2048) /* RW-4A */
-#define NV_PDISP_FE_HEAD_SEM_DEBUG_STATUS_RGSEM_ALL                   5:0 /* one W1C bit per RG semaphore */
-#endif
 
 void
 kheadReadPendingRgSemIntr_v04_01
@@ -73,52 +60,6 @@ kheadReadPendingRgSemIntr_v04_01
             *pHeadIntrMask |= headIntr_RgSem(i);
         }
     }
-}
-
-/*
- * When the display skips an RG semaphore release it latches the head's
- * HEAD_SEM_DEBUG bit and raises the RG_SEM_SKIPPED error event, which is
- * routed to GSP-RM through CTRL_DISP ERROR. GSP-RM has no handler for that
- * event, so it never clears it: the GSP services the pending interrupt in a
- * loop (its stuck-interrupt watchdog fires every ~1.7 ms), stays ~98 % busy,
- * and its utilisation-based clock policy pins the GPU clocks at max until
- * GSP-RM is reloaded. Clear it from here, which runs on every RG semaphore
- * (vblank) interrupt. Only for the Ampere/Ada displays whose manuals define
- * these registers.
- */
-static void
-_kheadClearRgSemSkipped
-(
-    OBJGPU            *pGpu,
-    KernelDisplay     *pKernelDisplay,
-    THREAD_STATE_NODE *pThreadState
-)
-{
-    NvU32 errDisp, head, headMask = 0;
-
-    if (!(IsAMPERE(pGpu) || IsADA(pGpu)))
-        return;
-
-    errDisp = GPU_REG_RD32_EX(pGpu, NV_PDISP_FE_EVT_STAT_ERROR_DISP, pThreadState);
-    if (!FLD_TEST_DRF(_PDISP, _FE_EVT_STAT_ERROR_DISP, _RG_SEM_SKIPPED, _PENDING, errDisp))
-        return;
-
-    for (head = 0; head < kdispGetNumHeads(pKernelDisplay); ++head)
-    {
-        NvU32 semDebug = DRF_VAL(_PDISP, _FE_HEAD_SEM_DEBUG, _STATUS_RGSEM_ALL,
-                                 GPU_REG_RD32_EX(pGpu, NV_PDISP_FE_HEAD_SEM_DEBUG(head), pThreadState));
-        if (semDebug != 0)
-        {
-            GPU_REG_WR32_EX(pGpu, NV_PDISP_FE_HEAD_SEM_DEBUG(head), semDebug, pThreadState);
-            headMask |= NVBIT(head);
-        }
-    }
-
-    GPU_REG_WR32_EX(pGpu, NV_PDISP_FE_EVT_STAT_ERROR_DISP,
-                    DRF_DEF(_PDISP, _FE_EVT_STAT_ERROR_DISP, _RG_SEM_SKIPPED, _RESET),
-                    pThreadState);
-
-    os_log_rg_sem_skipped(headMask);
 }
 
 void
@@ -154,6 +95,4 @@ kheadHandleRgSemIntr_v04_01
             kdispNotifyEvent(pGpu, pKernelDisplay, NVC370_NOTIFIERS_RG_SEM_NOTIFICATION, &params, sizeof(params), 0, 0);
         }
     }
-
-    _kheadClearRgSemSkipped(pGpu, pKernelDisplay, pThreadState);
 }

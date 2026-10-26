@@ -165,7 +165,7 @@ void        NV_API_CALL  os_dump_stack                    (void);
 NvBool      NV_API_CALL  os_is_efi_enabled                (void);
 NvBool      NV_API_CALL  os_is_xen_dom0                   (void);
 NvBool      NV_API_CALL  os_is_vgx_hyper                  (void);
-void        NV_API_CALL  os_log_rg_sem_skipped            (NvU32);
+void        NV_API_CALL  os_log_rg_sem_skipped            (NvU32, NvBool);
 NV_STATUS   NV_API_CALL  os_inject_vgx_msi                (NvU16, NvU64, NvU32);
 NvBool      NV_API_CALL  os_is_grid_supported             (void);
 NvU32       NV_API_CALL  os_get_grid_csp_support          (void);
