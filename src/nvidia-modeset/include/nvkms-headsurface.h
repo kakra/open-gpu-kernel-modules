@@ -40,6 +40,10 @@ NvU64 nvHsMapSurfaceToDevice(
     const NvU64 sizeInBytes,
     enum NvHsMapPermissions hsMapPermissions);
 
+NvU64 nvHsGetSurfaceGpuAddress(
+    const NVDevEvoRec *pDevEvo,
+    const NVSurfaceEvoRec *pSurfaceEvo);
+
 void nvHsUnmapSurfaceFromDevice(
     const NVDevEvoRec *pDevEvo,
     const NvU32 rmHandle,
