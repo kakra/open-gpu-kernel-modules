@@ -74,14 +74,17 @@ typedef struct dma_buf_map nv_sysio_map_t;
 static int nv_drm_gem_vmap(struct drm_gem_object *gem,
                            nv_sysio_map_t *map)
 {
+    struct nv_drm_gem_object *nv_gem = to_nv_gem_object(gem);
     void *vaddr = nv_drm_gem_prime_vmap(gem);
     if (vaddr == NULL) {
         return -ENOMEM;
     } else if (IS_ERR(vaddr)) {
         return PTR_ERR(vaddr);
     }
+    /* vmap()ed system memory is not I/O memory, an ioremap()ed BAR is */
     map->vaddr = vaddr;
-    map->is_iomem = true;
+    map->is_iomem = nv_gem->ops->prime_vmap_is_iomem != NULL &&
+                    nv_gem->ops->prime_vmap_is_iomem(nv_gem);
     return 0;
 }
 

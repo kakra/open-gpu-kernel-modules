@@ -48,6 +48,8 @@ struct nv_drm_gem_object_funcs {
     void (*free)(struct nv_drm_gem_object *nv_gem);
     struct sg_table *(*prime_get_sg_table)(struct nv_drm_gem_object *nv_gem);
     void *(*prime_vmap)(struct nv_drm_gem_object *nv_gem);
+    /* Whether prime_vmap() returns I/O memory, false if NULL */
+    bool (*prime_vmap_is_iomem)(struct nv_drm_gem_object *nv_gem);
     void (*prime_vunmap)(struct nv_drm_gem_object *nv_gem, void *address);
     struct drm_gem_object *(*prime_dup)(struct drm_device *dev,
                                         const struct nv_drm_gem_object *nv_gem_src);

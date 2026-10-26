@@ -338,6 +338,17 @@ static void *__nv_drm_gem_nvkms_prime_vmap(
     return ERR_PTR(-ENOMEM);
 }
 
+static bool __nv_drm_gem_nvkms_prime_vmap_is_iomem(
+    struct nv_drm_gem_object *nv_gem)
+{
+    struct nv_drm_gem_nvkms_memory *nv_nvkms_memory =
+        to_nv_nvkms_memory(nv_gem);
+
+    /* Only the ioremap_wc() mapping of vidmem, see __nv_drm_gem_nvkms_prime_vmap() */
+    return nv_nvkms_memory->physically_mapped &&
+           nv_nvkms_memory->pWriteCombinedIORemapAddress != NULL;
+}
+
 static void __nv_drm_gem_nvkms_prime_vunmap(
     struct nv_drm_gem_object *nv_gem,
     void *address)
@@ -395,6 +406,7 @@ const struct nv_drm_gem_object_funcs nv_gem_nvkms_memory_ops = {
     .free = __nv_drm_gem_nvkms_memory_free,
     .prime_dup = __nv_drm_gem_nvkms_prime_dup,
     .prime_vmap = __nv_drm_gem_nvkms_prime_vmap,
+    .prime_vmap_is_iomem = __nv_drm_gem_nvkms_prime_vmap_is_iomem,
     .prime_vunmap = __nv_drm_gem_nvkms_prime_vunmap,
     .mmap = __nv_drm_gem_nvkms_mmap,
     .handle_vma_fault = __nv_drm_gem_nvkms_handle_vma_fault,
