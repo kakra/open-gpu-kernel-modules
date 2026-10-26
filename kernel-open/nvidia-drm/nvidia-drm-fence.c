@@ -2306,7 +2306,7 @@ fence_context_sync_lookup_failed:
     nv_drm_gem_object_unreference_unlocked(&nv_fence_context->base);
 
 done:
-    return 0;
+    return ret;
 }
 
 int nv_drm_semsurf_fence_attach_ioctl(struct drm_device *dev,
@@ -2440,17 +2440,20 @@ int nv_drm_semsurf_export_to_syncobj_point_ioctl(struct drm_device *dev,
         goto done;
     }
 
+    /* Point 0 is a binary syncobj: its fence is replaced, not chained */
+    if (p->syncobj_point != 0) {
 #if defined(NV_DMA_FENCE_CHAIN_ALLOC_PRESENT)
-    chain = dma_fence_chain_alloc();
+        chain = dma_fence_chain_alloc();
 #else
-    chain = kzalloc(sizeof(struct dma_fence_chain), GFP_KERNEL);
+        chain = kzalloc(sizeof(struct dma_fence_chain), GFP_KERNEL);
 #endif
-    if (!chain) {
-        ret = -ENOMEM;
-        NV_DRM_DEV_LOG_ERR(
-            nv_dev,
-            "Failed to allocate dmabuf chain");
-        goto done;
+        if (!chain) {
+            ret = -ENOMEM;
+            NV_DRM_DEV_LOG_ERR(
+                nv_dev,
+                "Failed to allocate dmabuf chain");
+            goto done;
+        }
     }
 
     /* Create a fence for the semsurf timeline point */
@@ -2462,6 +2465,7 @@ int nv_drm_semsurf_export_to_syncobj_point_ioctl(struct drm_device *dev,
 
     if (IS_ERR(fence)) {
         ret = PTR_ERR(fence);
+        fence = NULL;
         NV_DRM_DEV_LOG_ERR(
             nv_dev,
             "Failed to create fence for wait_value: %llu",
@@ -2469,12 +2473,26 @@ int nv_drm_semsurf_export_to_syncobj_point_ioctl(struct drm_device *dev,
         goto done;
     }
 
-    /* Replace the syncobj timeline point with our fence */
-    drm_syncobj_add_point(syncobj, chain, fence, p->syncobj_point);
+    if (chain) {
+        /* Replace the syncobj timeline point with our fence */
+        drm_syncobj_add_point(syncobj, chain, fence, p->syncobj_point);
+        /* The syncobj owns the chain now */
+        chain = NULL;
+    } else {
+        drm_syncobj_replace_fence(syncobj, fence);
+    }
 
     ret = 0;
 
 done:
+    if (chain) {
+#if defined(NV_DMA_FENCE_CHAIN_ALLOC_PRESENT)
+        dma_fence_chain_free(chain);
+#else
+        kfree(chain);
+#endif
+    }
+
     if (syncobj) {
         drm_syncobj_put(syncobj);
     }
