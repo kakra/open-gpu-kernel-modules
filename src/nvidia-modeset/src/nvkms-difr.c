@@ -91,6 +91,7 @@
 
 
 #include "nvkms-difr.h"
+#include "nvkms-headsurface.h"
 #include "nvkms-push.h"
 #include "nvkms-rm.h"
 #include "nvkms-rmapi.h"
@@ -733,7 +734,16 @@ static NvBool PrefetchHelperSurfaceEvo(NVDIFRStateEvoPtr pDifr,
     pSurfaceEvo->difrLastPrefetchPass = pDifr->prefetchPass;
 
     /* Collect copy parameters and do the prefetch. */
-    params.surfGpuAddress = pSurfaceEvo->gpuAddress;
+    params.surfGpuAddress = nvHsGetSurfaceGpuAddress(pDifr->pDevEvo, pSurfaceEvo);
+    if (params.surfGpuAddress == 0) {
+        /*
+         * Not mapped into the NVKMS GPU address space (the mapping failed and
+         * is retried next time): don't let the copy engine read from address
+         * 0. As for noDisplayCaching, tell RM this frame can't be prefetched.
+         */
+        *status = NV2080_CTRL_LPWR_DIFR_PREFETCH_FAIL_OS_FLIPS_ENABLED;
+        return FALSE;
+    }
     params.surfSizeBytes = pSurfaceEvo->planes[0].rmObjectSizeInBytes;
     params.surfPitchBytes = pSurfaceEvo->planes[0].pitch;
     params.surfFormat = pSurfaceEvo->format;

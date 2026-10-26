@@ -188,6 +188,46 @@ NvU64 nvHsMapSurfaceToDevice(
     }
 }
 
+/*!
+ * Return the surface's address in the NVKMS GPU VA space, mapping it first if
+ * nvEvoRegisterSurface() deferred the mapping.
+ */
+NvU64 nvHsGetSurfaceGpuAddress(
+    const NVDevEvoRec *pDevEvo,
+    const NVSurfaceEvoRec *pConstSurfaceEvo)
+{
+    /* Callers have const pointers; the surface itself isn't const. */
+    NVSurfaceEvoRec *pSurfaceEvo = (NVSurfaceEvoRec *)pConstSurfaceEvo;
+
+    if (pSurfaceEvo->gpuMapPending) {
+        NvU64 gpuAddress =
+            nvHsMapSurfaceToDevice(pDevEvo,
+                                   pSurfaceEvo->planes[0].rmHandle,
+                                   pSurfaceEvo->planes[0].rmObjectSizeInBytes,
+                                   pSurfaceEvo->gpuMapPermissions);
+
+        if (gpuAddress == NV_HS_BAD_GPU_ADDRESS) {
+            /*
+             * Leave the mapping pending, so the next use tries again; until
+             * then callers get 0 and must not use it. Log only the first
+             * failure: headSurface asks once per frame.
+             */
+            if (!pSurfaceEvo->gpuMapFailureLogged) {
+                nvEvoLogDev(pDevEvo, EVO_LOG_ERROR,
+                            "Failed to map surface 0x%08x into the NVKMS GPU address space",
+                            pSurfaceEvo->planes[0].rmHandle);
+                pSurfaceEvo->gpuMapFailureLogged = TRUE;
+            }
+            return 0;
+        }
+
+        pSurfaceEvo->gpuMapPending = FALSE;
+        pSurfaceEvo->gpuAddress = gpuAddress;
+    }
+
+    return pSurfaceEvo->gpuAddress;
+}
+
 void nvHsUnmapSurfaceFromDevice(
     const NVDevEvoRec *pDevEvo,
     const NvU32 rmHandle,

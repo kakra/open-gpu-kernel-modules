@@ -453,6 +453,7 @@ static NvU32 HsGet2dFormat(enum NvKmsSurfaceMemoryFormat format)
  * Assign the Nv3dRenderTexInfo, given an NVSurfaceEvoRec.
  */
 static void AssignRenderTexInfo(
+    const NVDevEvoRec *pDevEvo,
     const NVSurfaceEvoRec *pSurface,
     const NvBool normalizedCoords,
     const NvBool filtering,
@@ -472,7 +473,7 @@ static void AssignRenderTexInfo(
         pTexInfo->texType = NV3D_TEX_TYPE_TWO_D_PITCH;
     }
 
-    pTexInfo->offset = pSurface->gpuAddress;
+    pTexInfo->offset = nvHsGetSurfaceGpuAddress(pDevEvo, pSurface);
 
     pTexInfo->normalizedCoords = normalizedCoords;
     pTexInfo->repeatType = NV3D_TEXHEAD_REPEAT_TYPE_NONE;
@@ -601,7 +602,8 @@ void nvHs3dClearSurface(
     nv3dSetColorTarget(p3d,
                        ct,
                        surfaceFormat,
-                       pSurfaceEvo->gpuAddress,
+                       nvHsGetSurfaceGpuAddress(pHsChannel->pDispEvo->pDevEvo,
+                                                pSurfaceEvo),
                        blockLinear,
                        pHsSurface->gobsPerBlock,
                        pSurfaceEvo->widthInPixels,
@@ -750,7 +752,7 @@ static void Hs3dSetup2dBlitSrc(
     /* NV902D_SET_SRC_HEIGHT */
     nvPushSetMethodData(p, pSrc->heightInPixels);
     /* NV902D_SET_SRC_OFFSET */
-    nvPushSetMethodDataU64(p, pSrc->gpuAddress);
+    nvPushSetMethodDataU64(p, nvHsGetSurfaceGpuAddress(pHsChannel->pDispEvo->pDevEvo, pSrc));
 
     nvPushImmedVal(p, NVA06F_SUBCHANNEL_2D, NV902D_SET_SRC_FORMAT, colorFormat);
 }
@@ -783,7 +785,7 @@ static void Hs3dSetup2dBlitDst(
     /* NV902D_SET_DST_HEIGHT */
     nvPushSetMethodData(p, pSurfaceEvo->heightInPixels);
     /* NV902D_SET_DST_OFFSET */
-    nvPushSetMethodDataU64(p, pSurfaceEvo->gpuAddress);
+    nvPushSetMethodDataU64(p, nvHsGetSurfaceGpuAddress(pHsChannel->pDispEvo->pDevEvo, pSurfaceEvo));
 
     nvPushImmedVal(p, NVA06F_SUBCHANNEL_2D, NV902D_SET_DST_FORMAT, colorFormat);
 }
@@ -865,6 +867,7 @@ void nvHs3dSetConfig(NVHsChannelEvoPtr pHsChannel)
     /* Set up sampler from blend surface. */
 
     AssignRenderTexInfo(
+        pHsChannel->pDispEvo->pDevEvo,
         pHsChannel->config.pBlendTexSurface,
         TRUE /* normalizedCoords */,
         TRUE /* filtering */,
@@ -873,6 +876,7 @@ void nvHs3dSetConfig(NVHsChannelEvoPtr pHsChannel)
     /* Set up sampler from offset surface. */
 
     AssignRenderTexInfo(
+        pHsChannel->pDispEvo->pDevEvo,
         pHsChannel->config.pOffsetTexSurface,
         TRUE /* normalizedCoords */,
         TRUE /* filtering */,
@@ -1199,7 +1203,8 @@ static void GetWarpMeshData(
 
     if (pSurface != NULL) {
 
-        pStreamSurf->gpuAddress = pSurface->gpuAddress;
+        pStreamSurf->gpuAddress =
+            nvHsGetSurfaceGpuAddress(pHsChannel->pDispEvo->pDevEvo, pSurface);
         pStreamSurf->size = pSurface->planes[0].rmObjectSizeInBytes;
         dataType = pHsChannel->config.warpMesh.dataType;
         *pVertexCount = pHsChannel->config.warpMesh.vertexCount;
@@ -1930,18 +1935,21 @@ NvBool nvHs3dRenderFrame(
     /* Set up sampler from source surfaces. */
 
     AssignRenderTexInfo(
+        pHsChannel->pDispEvo->pDevEvo,
         workArea.threeD.src.pSurfaceEvo[NVKMS_MAIN_LAYER],
         FALSE /* normalizedCoords */,
         srcFiltering,
         &pHsChannel->nv3d.texInfo[NVKMS_HEADSURFACE_TEXINFO_SRC]);
 
     AssignRenderTexInfo(
+        pHsChannel->pDispEvo->pDevEvo,
         pHsChannel->config.cursor.pSurfaceEvo,
         FALSE /* normalizedCoords */,
         srcFiltering,
         &pHsChannel->nv3d.texInfo[NVKMS_HEADSURFACE_TEXINFO_CURSOR]);
 
     AssignRenderTexInfo(
+        pHsChannel->pDispEvo->pDevEvo,
         workArea.threeD.src.pSurfaceEvo[NVKMS_OVERLAY_LAYER],
         FALSE /* normalizedCoords */,
         srcFiltering,
@@ -2033,7 +2041,7 @@ void nvHs3dReleaseSemaphore(
         nvKmsSemaphorePayloadOffset() * 4;
 
     const NvU64 gpuAddress =
-        pSurfaceEvo->gpuAddress +
+        nvHsGetSurfaceGpuAddress(pHsChannel->pDispEvo->pDevEvo, pSurfaceEvo) +
         (offsetInWords * 4) +
         payloadByteOffsetInSemaphore;
 
