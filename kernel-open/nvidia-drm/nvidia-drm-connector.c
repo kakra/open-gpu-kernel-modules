@@ -999,7 +999,26 @@ int nv_drm_connector_update_topology_property(struct nv_drm_connector *nv_connec
     struct nv_drm_connector_state *nv_state = to_nv_drm_connector_state(state);
     struct drm_device *dev = connector->dev;
     struct nv_drm_device *nv_dev = to_nv_device(dev);
+    const struct drm_property_blob *old_blob = nv_state->hdcp_topology_blob;
     int ret;
+
+    /* The content protection properties are only attached to DP and HDMI */
+    if ((nv_connector->type != NVKMS_CONNECTOR_TYPE_DP) &&
+        (nv_connector->type != NVKMS_CONNECTOR_TYPE_HDMI)) {
+        return 0;
+    }
+
+    /*
+     * RM reports HDCP disabled/inactive on every DPMS off, which clears an
+     * already clear topology.  Don't send a hotplug uevent for that: it makes
+     * compositors force-probe every connector.
+     */
+    if ((old_blob != NULL) ?
+        ((old_blob->length == NVKMS_HDCP_TOPOLOGY_SIZE) &&
+         (memcmp(old_blob->data, topology, NVKMS_HDCP_TOPOLOGY_SIZE) == 0)) :
+        (memchr_inv(topology, 0, NVKMS_HDCP_TOPOLOGY_SIZE) == NULL)) {
+        return 0;
+    }
 
     ret = drm_property_replace_global_blob(dev,
                                             &nv_state->hdcp_topology_blob,
