@@ -273,6 +273,7 @@ enum NvKmsIoctlCommand {
     NVKMS_IOCTL_FRAMEBUFFER_CONSOLE_DISABLED,
     NVKMS_IOCTL_REGISTER_VBLANK_INTR_CALLBACK,
     NVKMS_IOCTL_UNREGISTER_VBLANK_INTR_CALLBACK,
+    NVKMS_IOCTL_GET_NEXT_EVENTS,
 };
 
 
@@ -3280,6 +3281,31 @@ struct NvKmsGetNextEventReply {
 struct NvKmsGetNextEventParams {
     struct NvKmsGetNextEventRequest request; /*! in */
     struct NvKmsGetNextEventReply reply;     /*! out */
+};
+
+
+/*!
+ * NVKMS_IOCTL_GET_NEXT_EVENTS: Pop up to NVKMS_GET_NEXT_EVENTS_MAX events off
+ * of the client's event queue in one call. Only for kernel-space clients.
+ */
+
+#define NVKMS_GET_NEXT_EVENTS_MAX 8
+
+struct NvKmsGetNextEventsRequest {
+    NvU32 padding;
+};
+
+struct NvKmsGetNextEventsReply {
+    /*! The number of valid entries in events[]. */
+    NvU32 numEvents;
+    /*! TRUE if events are left in the queue. */
+    NvBool moreEvents;
+    struct NvKmsEvent events[NVKMS_GET_NEXT_EVENTS_MAX];
+};
+
+struct NvKmsGetNextEventsParams {
+    struct NvKmsGetNextEventsRequest request; /*! in */
+    struct NvKmsGetNextEventsReply reply;     /*! out */
 };
 
 
