@@ -142,13 +142,19 @@ nv_drm_gem_prime_import_sg_table(struct drm_device *dev,
     struct nv_drm_gem_dma_buf *nv_dma_buf;
     struct NvKmsKapiMemory *pMemory;
 
-    if ((nv_dma_buf =
-            nv_drm_calloc(1, sizeof(*nv_dma_buf))) == NULL) {
-        return NULL;
+    // dma_buf->size must be a multiple of PAGE_SIZE
+    if (dma_buf->size % PAGE_SIZE) {
+        NV_DRM_DEV_LOG_ERR(nv_dev,
+            "DMA-BUF size 0x%zx is not a multiple of the page size",
+            dma_buf->size);
+        return ERR_PTR(-EINVAL);
     }
 
-    // dma_buf->size must be a multiple of PAGE_SIZE
-    BUG_ON(dma_buf->size % PAGE_SIZE);
+    // The DRM core checks for an error pointer, not NULL
+    if ((nv_dma_buf =
+            nv_drm_calloc(1, sizeof(*nv_dma_buf))) == NULL) {
+        return ERR_PTR(-ENOMEM);
+    }
 
     pMemory = NULL;
     if (drm_core_check_feature(dev, DRIVER_MODESET)) {
