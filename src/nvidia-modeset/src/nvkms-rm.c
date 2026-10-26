@@ -42,6 +42,7 @@
 
 #include "nvkms-push.h"
 #include "nvkms-difr.h"
+#include "nvkms-hal.h"
 
 #include "nv_smg.h"
 
@@ -50,6 +51,7 @@
 #include <class/cla083.h> /* NVA083_GRID_DISPLAYLESS */
 
 #include "class/cl00c3.h" /* NV01_MEMORY_SYNCPOINT */
+#include "class/cl0002.h" /* NV01_CONTEXT_DMA */
 #include "class/cl0005.h" /* NV01_EVENT */
 
 #include <class/cl0070.h> // NV01_MEMORY_VIRTUAL
@@ -5951,17 +5953,10 @@ void nvRmUnregisterBacklight(NVDispEvoRec *pDispEvo)
     pDispEvo->backlightDevice = NULL;
 }
 
-NvU32 nvRmAllocAndBindSurfaceDescriptor(
-    NVDevEvoPtr pDevEvo,
-    NvU32 hMemory,
-    const enum NvKmsSurfaceMemoryLayout layout,
-    NvU64 limit,
-    NVSurfaceDescriptor *pSurfaceDesc,
-    NvBool mapToDisplayRm)
+static NvU32 SurfaceDescriptorCtxDmaFlags(
+    const enum NvKmsSurfaceMemoryLayout layout)
 {
-    NVSurfaceDescriptor surfaceDesc = { };
     NvU32 flags = DRF_DEF(OS03, _FLAGS, _HASH_TABLE, _DISABLE);
-    NvU32 ret;
 
     switch (layout) {
         case NvKmsSurfaceMemoryLayoutBlockLinear:
@@ -5971,6 +5966,21 @@ NvU32 nvRmAllocAndBindSurfaceDescriptor(
             flags |= DRF_DEF(OS03, _FLAGS, _PTE_KIND, _PITCH);
             break;
     }
+
+    return flags;
+}
+
+NvU32 nvRmAllocAndBindSurfaceDescriptor(
+    NVDevEvoPtr pDevEvo,
+    NvU32 hMemory,
+    const enum NvKmsSurfaceMemoryLayout layout,
+    NvU64 limit,
+    NVSurfaceDescriptor *pSurfaceDesc,
+    NvBool mapToDisplayRm)
+{
+    NVSurfaceDescriptor surfaceDesc = { };
+    const NvU32 flags = SurfaceDescriptorCtxDmaFlags(layout);
+    NvU32 ret;
 
      /* Each surface to be displayed needs its own surface descriptor */
     nvAssert(pDevEvo->displayHandle != 0);
@@ -6015,4 +6025,68 @@ free_this_handle_and_fail:
                                         nvEvoGlobal.clientHandle,
                                         &surfaceDesc);
     return ret;
+}
+
+/*!
+ * Whether nvRmAllocAndBindSurfaceDescriptorUnlocked() can stand in for
+ * nvRmAllocAndBindSurfaceDescriptor() on this device: the descriptor is a
+ * plain context DMA that only gets bound to the core channel at allocation,
+ * and a failed bind can't be fixed by garbage collecting syncpts (which needs
+ * the NVKMS lock).
+ */
+NvBool nvRmCanAllocSurfaceDescriptorUnlocked(const NVDevEvoRec *pDevEvo)
+{
+    return nvEvoHalUsesCtxDmaSurfaceDescriptors(pDevEvo) &&
+           !pDevEvo->isSOCDisplay &&
+           !pDevEvo->supportsSyncpts &&
+           (pDevEvo->core != NULL);
+}
+
+/*!
+ * The RM calls of nvRmAllocAndBindSurfaceDescriptor(), for a device where
+ * nvRmCanAllocSurfaceDescriptorUnlocked() is TRUE, made without the global
+ * NVKMS lock: allocate the context DMA with the already reserved handle
+ * hCtxDma and bind it to the core channel hCoreChannel. Doesn't touch any
+ * NVKMS state; on failure the caller frees hCtxDma (if it was allocated) and
+ * releases the handle.
+ */
+NvU32 nvRmAllocAndBindSurfaceDescriptorUnlocked(
+    NvU32 hDevice,
+    NvU32 hCoreChannel,
+    NvU32 hCtxDma,
+    NvU32 hMemory,
+    const enum NvKmsSurfaceMemoryLayout layout,
+    NvU64 limit,
+    NVSurfaceDescriptor *pSurfaceDesc)
+{
+    NV_CONTEXT_DMA_ALLOCATION_PARAMS ctxdmaParams = { };
+    NV0002_CTRL_BIND_CONTEXTDMA_PARAMS bindParams = { };
+    NVSurfaceDescriptor surfaceDesc = { };
+    NvU32 ret;
+
+    ctxdmaParams.hMemory = hMemory;
+    ctxdmaParams.flags = SurfaceDescriptorCtxDmaFlags(layout);
+    ctxdmaParams.offset = 0;
+    ctxdmaParams.limit = limit;
+
+    ret = nvRmApiAlloc(nvEvoGlobal.clientHandle,
+                       hDevice,
+                       hCtxDma,
+                       NV01_CONTEXT_DMA,
+                       &ctxdmaParams);
+    if (ret != NVOS_STATUS_SUCCESS) {
+        return ret;
+    }
+
+    surfaceDesc.ctxDmaHandle = hCtxDma;
+    surfaceDesc.lazyBind = TRUE;
+    surfaceDesc.lazyBoundChannelMask = 0;
+    *pSurfaceDesc = surfaceDesc;
+
+    bindParams.hChannel = hCoreChannel;
+
+    return nvRmApiControl(nvEvoGlobal.clientHandle,
+                          hCtxDma,
+                          NV0002_CTRL_CMD_BIND_CONTEXTDMA,
+                          &bindParams, sizeof(bindParams));
 }
