@@ -72,7 +72,7 @@ static inline NvU32 NVKMS_KAPI_NOTIFIER_OFFSET(NvU32 head,
 }
 
 NvBool nvKmsKapiAllocateNotifiers(struct NvKmsKapiDevice *device);
-NvBool nvKmsKapiAllocateSemaphores(struct NvKmsKapiDevice *device, NvBool inVideoMemory);
+NvBool nvKmsKapiAllocateSemaphores(struct NvKmsKapiDevice *device);
 
 void nvKmsKapiFreeNisoSurface(struct NvKmsKapiDevice *device,
                               struct NvKmsKapiNisoSurface *surf);
