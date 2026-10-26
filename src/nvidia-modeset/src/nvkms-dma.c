@@ -123,6 +123,16 @@ void nvEvoMakeRoom(NVEvoChannelPtr pChannel, NvU32 count)
                     push_buffer->buffer = push_buffer->base;
                     nvDmaKickoffEvo(pChannel);
                     putOffset = 0;
+
+                    /*
+                     * The space from the start of the push buffer up to GET
+                     * is free now; check it without yielding first.
+                     * fifo_free_count still holds the space left before
+                     * the end, so falling through would always yield,
+                     * once per lap of the push buffer, with the NVKMS lock
+                     * held. With PUT at 0, the next pass can't wrap again.
+                     */
+                    continue;
                 }
                 else if (putOffset != push_buffer->put_offset) {
                     nvDmaKickoffEvo(pChannel);
