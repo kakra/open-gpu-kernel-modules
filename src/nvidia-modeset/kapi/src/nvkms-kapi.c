@@ -3950,6 +3950,56 @@ static NvBool ApplyModeSetConfig(
  * This executes without the nvkms_lock held. The lock will be grabbed
  * during the kapi dispatching contained in this function.
  */
+/*
+ * Convert an NVKMS event and pass it to the device's event callback.
+ */
+static void DispatchKmsEvent
+(
+    struct NvKmsKapiDevice *device,
+    const struct NvKmsEvent *pEvent
+)
+{
+    struct NvKmsKapiEvent kapiEvent = { };
+
+    kapiEvent.type = pEvent->eventType;
+
+    kapiEvent.device = device;
+    kapiEvent.privateData = device->privateData;
+
+    switch (pEvent->eventType) {
+        case NVKMS_EVENT_TYPE_DPY_CHANGED:
+            kapiEvent.u.displayChanged.display =
+                nvDpyIdToNvU32(pEvent->u.dpyChanged.dpyId);
+            break;
+        case NVKMS_EVENT_TYPE_DPY_CONTENT_PROTECTION_CHANGED:
+            kapiEvent.u.displayCpChanged.display =
+                nvDpyIdToNvU32(pEvent->u.dpyCpChanged.dpyId);
+            kapiEvent.u.displayCpChanged.cp =
+                pEvent->u.dpyCpChanged.cp;
+            break;
+        case NVKMS_EVENT_TYPE_DPY_CP_TOPOLOGY_CHANGED:
+            kapiEvent.u.displayCpTopologyChanged.display =
+                nvDpyIdToNvU32(pEvent->u.dpyCpTopologyChanged.dpyId);
+            kapiEvent.u.displayCpTopologyChanged.topology =
+                pEvent->u.dpyCpTopologyChanged.topology;
+            break;
+        case NVKMS_EVENT_TYPE_DYNAMIC_DPY_CONNECTED:
+            kapiEvent.u.dynamicDisplayConnected.display =
+                nvDpyIdToNvU32(pEvent->u.dynamicDpyConnected.dpyId);
+            break;
+        case NVKMS_EVENT_TYPE_FLIP_OCCURRED:
+            kapiEvent.u.flipOccurred.head =
+                pEvent->u.flipOccurred.head;
+            kapiEvent.u.flipOccurred.layer =
+                pEvent->u.flipOccurred.layer;
+            break;
+        default:
+            return;
+    }
+
+    device->eventCallback(&kapiEvent);
+}
+
 void nvKmsKapiHandleEventQueueChange
 (
     struct NvKmsKapiDevice *device
@@ -3965,73 +4015,31 @@ void nvKmsKapiHandleEventQueueChange
      */
     nvAssert(device->eventCallback != NULL);
 
+    /*
+     * Every NVKMS ioctl takes the global NVKMS lock: fetch the events in
+     * batches instead of one by one, which costs an extra lock round trip
+     * per event (for the final "no event" reply).
+     */
     do
     {
-        struct NvKmsGetNextEventParams kmsEventParams = { };
-        struct NvKmsKapiEvent kapiEvent = { };
-        NvBool err = NV_FALSE;
+        struct NvKmsGetNextEventsParams kmsEventsParams = { };
+        NvU32 i;
 
         if (!nvkms_ioctl_from_kapi(device->pKmsOpen,
-                                   NVKMS_IOCTL_GET_NEXT_EVENT,
-                                   &kmsEventParams, sizeof(kmsEventParams))) {
+                                   NVKMS_IOCTL_GET_NEXT_EVENTS,
+                                   &kmsEventsParams,
+                                   sizeof(kmsEventsParams))) {
             break;
         }
 
-        if (!kmsEventParams.reply.valid) {
+        for (i = 0; i < kmsEventsParams.reply.numEvents; i++) {
+            DispatchKmsEvent(device, &kmsEventsParams.reply.events[i]);
+        }
+
+        if (!kmsEventsParams.reply.moreEvents) {
             break;
         }
-
-        kapiEvent.type = kmsEventParams.reply.event.eventType;
-
-        kapiEvent.device = device;
-        kapiEvent.privateData = device->privateData;
-
-        switch (kmsEventParams.reply.event.eventType) {
-            case NVKMS_EVENT_TYPE_DPY_CHANGED:
-                kapiEvent.u.displayChanged.display =
-                    nvDpyIdToNvU32(kmsEventParams.
-                                   reply.event.u.dpyChanged.dpyId);
-                break;
-            case NVKMS_EVENT_TYPE_DPY_CONTENT_PROTECTION_CHANGED:
-                kapiEvent.u.displayCpChanged.display =
-                    nvDpyIdToNvU32(kmsEventParams.
-                                   reply.event.u.dpyCpChanged.dpyId);
-                kapiEvent.u.displayCpChanged.cp =
-                    kmsEventParams.reply.event.u.dpyCpChanged.cp;
-                break;
-            case NVKMS_EVENT_TYPE_DPY_CP_TOPOLOGY_CHANGED:
-                kapiEvent.u.displayCpTopologyChanged.display =
-                    nvDpyIdToNvU32(kmsEventParams.
-                                   reply.event.u.dpyCpTopologyChanged.dpyId);
-                kapiEvent.u.displayCpTopologyChanged.topology =
-                    kmsEventParams.reply.event.u.dpyCpTopologyChanged.topology;
-                break;
-            case NVKMS_EVENT_TYPE_DYNAMIC_DPY_CONNECTED:
-                kapiEvent.u.dynamicDisplayConnected.display =
-                    nvDpyIdToNvU32(kmsEventParams.
-                                   reply.event.u.dynamicDpyConnected.dpyId);
-                break;
-            case NVKMS_EVENT_TYPE_FLIP_OCCURRED:
-                kapiEvent.u.flipOccurred.head =
-                    kmsEventParams.reply.event.u.flipOccurred.head;
-                kapiEvent.u.flipOccurred.layer =
-                    kmsEventParams.reply.event.u.flipOccurred.layer;
-                break;
-            default:
-                continue;
-        }
-
-        if (err) {
-            nvKmsKapiLogDeviceDebug(
-                device,
-                "Error in conversion from "
-                "NvKmsGetNextEventParams to NvKmsKapiEvent");
-            continue;
-        }
-
-        device->eventCallback(&kapiEvent);
-
-    } while(1);
+    } while (1);
 }
 
 /*

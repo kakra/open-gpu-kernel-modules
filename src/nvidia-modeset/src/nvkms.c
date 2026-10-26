@@ -3334,6 +3334,47 @@ static NvBool GetNextEvent(struct NvKmsPerOpen *pOpen,
 
 
 /*!
+ * Pop up to NVKMS_GET_NEXT_EVENTS_MAX events off of the client's event queue.
+ */
+static NvBool GetNextEvents(struct NvKmsPerOpen *pOpen,
+                            void *pParamsVoid)
+{
+    struct NvKmsGetNextEventsParams *pParams = pParamsVoid;
+    struct NvKmsPerOpenEventListEntry *pEntry;
+
+    nvAssert(pOpen->type == NvKmsPerOpenTypeIoctl);
+
+    if (pOpen->clientType != NVKMS_CLIENT_KERNEL_SPACE) {
+        return FALSE;
+    }
+
+    pParams->reply.numEvents = 0;
+
+    while (!nvListIsEmpty(&pOpen->ioctl.eventList) &&
+           (pParams->reply.numEvents < NVKMS_GET_NEXT_EVENTS_MAX)) {
+
+        pEntry = nvListFirstEntry(&pOpen->ioctl.eventList,
+                                  struct NvKmsPerOpenEventListEntry,
+                                  eventListEntry);
+
+        pParams->reply.events[pParams->reply.numEvents++] = pEntry->event;
+
+        nvListDel(&pEntry->eventListEntry);
+
+        nvFree(pEntry);
+    }
+
+    pParams->reply.moreEvents = !nvListIsEmpty(&pOpen->ioctl.eventList);
+
+    if (!pParams->reply.moreEvents && (pParams->reply.numEvents > 0)) {
+        nvkms_event_queue_changed(pOpen->pOpenKernel, FALSE);
+    }
+
+    return TRUE;
+}
+
+
+/*!
  * Record the client's event interest for the specified device.
  */
 static NvBool DeclareEventInterest(struct NvKmsPerOpen *pOpen,
@@ -5177,6 +5218,7 @@ NvBool nvKmsIoctl(
         ENTRY(NVKMS_IOCTL_FRAMEBUFFER_CONSOLE_DISABLED, FramebufferConsoleDisabled),
         ENTRY(NVKMS_IOCTL_REGISTER_VBLANK_INTR_CALLBACK, RegisterVblankIntrCallback),
         ENTRY(NVKMS_IOCTL_UNREGISTER_VBLANK_INTR_CALLBACK, UnregisterVblankIntrCallback),
+        ENTRY(NVKMS_IOCTL_GET_NEXT_EVENTS, GetNextEvents),
     };
 
     struct NvKmsPerOpen *pOpen = pOpenVoid;
