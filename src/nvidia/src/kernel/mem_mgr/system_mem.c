@@ -243,6 +243,7 @@ sysmemConstruct_IMPL
     NvU32 flags;
     RM_ATTR_PAGE_SIZE pageSizeAttr;
     NvBool bRetry = NV_FALSE;
+    NvBool bExplicitPageSize = NV_FALSE;
     NvBool bLockAcquired = NV_FALSE;
     NvBool bPrevSkipIommuMapping = NV_FALSE;
     NvU64  scanoutCarveoutBase = 0;
@@ -340,7 +341,7 @@ sysmemConstruct_IMPL
     }
 
     //
-    // Enable retrying the allocation only if the page size is default.
+    // Enable retrying the allocation if the page size is default.
     // Each new attempt decreases the page size to the next supported RM value
     // until the minimum OS granularity is reached.
     //
@@ -348,6 +349,22 @@ sysmemConstruct_IMPL
         (GPU_GET_MEMORY_MANAGER(pGpu)->bSysmemPageSizeDefaultAllowLargePages))
     {
         bRetry = NV_TRUE;
+    }
+    else if ((FLD_TEST_DRF(OS32, _ATTR, _PAGE_SIZE, _BIG, pAllocData->attr) ||
+              FLD_TEST_DRF(OS32, _ATTR, _PAGE_SIZE, _HUGE, pAllocData->attr)) &&
+             !FLD_TEST_DRF(OS32, _ATTR, _PHYSICALITY, _CONTIGUOUS, pAllocData->attr) &&
+             !FLD_TEST_DRF(OS32, _ATTR2, _FAIL_FAST, _YES, pAllocData->attr2))
+    {
+        //
+        // Explicit big or huge page requests fail when the OS has no free
+        // block of that order, which is common after some uptime. Retry them
+        // with smaller pages, too: a mapping requested at a larger page size
+        // than the physical one falls back to the physical page size in
+        // dmaAllocMapping_GM107(). Contiguous allocations need one block of
+        // the whole size either way, and fail-fast clients retry themselves.
+        //
+        bRetry = NV_TRUE;
+        bExplicitPageSize = NV_TRUE;
     }
 
     do
@@ -531,6 +548,8 @@ sysmemConstruct_IMPL
             if (bRetry)
             {
                 NvU64 pageSize;
+                const NvU64 failedPageSize = memdescGetPageSize(pMemDesc, AT_GPU);
+
                 pageSize = _sysmemGetNextSmallestPageSize(pGpu, &pAllocData->attr, &pAllocData->attr2);
 
                 //
@@ -555,7 +574,20 @@ sysmemConstruct_IMPL
                 {
                     NV_CHECK_OK_OR_GOTO(rmStatus, LEVEL_ERROR, rmStatus, failed_free_memdesc);
                 }
-                NV_PRINTF(LEVEL_INFO, "Sysmem alloc failed, retrying with page size 0x%llx.\n", pageSize);
+                if (bExplicitPageSize)
+                {
+                    //
+                    // Release builds only print LEVEL_ERROR. The client gets
+                    // smaller pages than it asked for, which is worth seeing.
+                    //
+                    NV_PRINTF(LEVEL_ERROR,
+                              "Sysmem alloc of 0x%llx bytes with page size 0x%llx failed, retrying with page size 0x%llx.\n",
+                              pAllocData->size, failedPageSize, pageSize);
+                }
+                else
+                {
+                    NV_PRINTF(LEVEL_INFO, "Sysmem alloc failed, retrying with page size 0x%llx.\n", pageSize);
+                }
             }
             else if (memdescGetFlag(pMemDesc, MEMDESC_FLAGS_ALLOC_FAIL_FAST))
             {
