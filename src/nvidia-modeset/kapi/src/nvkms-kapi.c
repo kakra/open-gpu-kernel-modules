@@ -665,8 +665,14 @@ static NvBool KmsAllocateDevice(struct NvKmsKapiDevice *device)
         goto done;
     }
 
-    /* Allocate semaphore memory in video memory whenever available */
-    if (!nvKmsKapiAllocateSemaphores(device, !device->isSOC)) {
+    /*
+     * Allocate semaphore memory in system memory: nvidia-drm reads a
+     * semaphore from the CPU on every commit with a plane in-fence, and an
+     * uncached read of video memory through BAR1 took ~130 us on a dGPU
+     * (AD104). The display engine already accesses the notifier surface in
+     * system memory the same way.
+     */
+    if (!nvKmsKapiAllocateSemaphores(device)) {
         nvKmsKapiLogDebug(
             "Failed to allocate Semaphore objects for GPU ID 0x%08x",
             device->gpuId);
