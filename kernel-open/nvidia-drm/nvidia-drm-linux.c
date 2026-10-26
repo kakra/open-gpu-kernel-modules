@@ -43,7 +43,7 @@ module_param_named(fbdev, nv_drm_fbdev_module_param, bool, 0444);
 
 MODULE_PARM_DESC(
     vblank,
-    "Enable drm vblank notification support (1 = enable, 0 = disable (default))");
+    "Enable drm vblank notification support (1 = enable (default), 0 = disable)");
 module_param_named(vblank, nv_drm_vblank_module_param, bool, 0444);
 
 #if defined(NV_DRM_HAS_COLOROP)
