@@ -649,9 +649,18 @@ NV_STATUS NV_API_CALL os_alloc_mem(
     }
     else
     {
-        if (alloc_size <= KMALLOC_LIMIT)
+        if (alloc_size <= PAGE_SIZE)
         {
             NV_KMALLOC_NO_OOM(*address, alloc_size);
+        }
+        else if (alloc_size <= KMALLOC_LIMIT)
+        {
+            //
+            // Above PAGE_SIZE, kmalloc() needs a high-order block. Don't
+            // retry reclaim and compaction for it, we fall back to vmalloc
+            // anyway. This follows kvmalloc().
+            //
+            NV_KMALLOC_NORETRY(*address, alloc_size);
         }
         if (*address == NULL)
         {

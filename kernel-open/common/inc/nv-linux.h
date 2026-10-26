@@ -461,6 +461,14 @@ static NvBool nv_numa_node_has_memory(int node_id)
         NV_MEMDBG_ADD(ptr, size);             \
     }
 
+#define NV_GFP_NORETRY (NV_GFP_KERNEL | __GFP_NORETRY | __GFP_NOWARN)
+
+#define NV_KMALLOC_NORETRY(ptr, size) \
+    { \
+        (ptr) = kmalloc(size, NV_GFP_NORETRY); \
+        NV_MEMDBG_ADD(ptr, size);              \
+    }
+
 #define NV_KFREE(ptr, size) \
     { \
         NV_MEMDBG_REMOVE(ptr, size); \
