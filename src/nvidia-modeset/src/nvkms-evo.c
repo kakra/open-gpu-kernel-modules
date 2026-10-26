@@ -5605,6 +5605,9 @@ void nvFreeCoreChannelEvo(NVDevEvoPtr pDevEvo)
     NvU32 dispIndex;
     NvU32 head;
 
+    /* Descriptors bound to this core channel need a new bind. */
+    pDevEvo->surfaceDescGeneration++;
+
     ClearApiHeadState(pDevEvo);
 
     nvEvoCancelPostFlipIMPTimer(pDevEvo);

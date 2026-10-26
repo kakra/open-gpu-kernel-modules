@@ -386,6 +386,14 @@ void nvkms_unlock_pm_from_kapi(void);
  * APIs for locking.
  */
 
+/*
+ * Temporarily release the global NVKMS lock around RM calls that don't touch
+ * NVKMS state. Only valid in an ioctl from a kernel-space (KAPI) client, which
+ * also holds the NVKMS PM lock, so suspend can't run in between.
+ */
+void nvkms_drop_global_lock(void);
+void nvkms_retake_global_lock(void);
+
 typedef struct nvkms_sema_t nvkms_sema_handle_t;
 
 nvkms_sema_handle_t*

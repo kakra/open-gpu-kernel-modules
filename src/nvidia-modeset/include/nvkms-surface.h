@@ -30,12 +30,21 @@ void nvEvoRegisterSurface(NVDevEvoPtr pDevEvo,
                           struct NvKmsPerOpenDev *pOpenDev,
                           struct NvKmsRegisterSurfaceParams *pParams,
                           enum NvHsMapPermissions hsMapPermissions);
+void nvEvoRegisterSurfaceUnlockedRm(NVDevEvoPtr pDevEvo,
+                                    struct NvKmsPerOpenDev *pOpenDev,
+                                    struct NvKmsRegisterSurfaceParams *pParams,
+                                    enum NvHsMapPermissions hsMapPermissions);
 
 void nvEvoUnregisterSurface(NVDevEvoPtr pDevEvo,
                             struct NvKmsPerOpenDev *pOpenDev,
                             NvKmsSurfaceHandle surfaceHandle,
                             NvBool skipUpdate,
                             NvBool skipSync);
+void nvEvoUnregisterSurfaceUnlockedRm(NVDevEvoPtr pDevEvo,
+                                      struct NvKmsPerOpenDev *pOpenDev,
+                                      NvKmsSurfaceHandle surfaceHandle,
+                                      NvBool skipUpdate,
+                                      NvBool skipSync);
 void nvEvoReleaseSurface(NVDevEvoPtr pDevEvo,
                          struct NvKmsPerOpenDev *pOpenDev,
                          NvKmsSurfaceHandle surfaceHandle);
