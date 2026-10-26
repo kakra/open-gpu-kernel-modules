@@ -1690,6 +1690,11 @@ void nvkms_sema_up(nvkms_sema_handle_t *sema)
     up(&sema->os_sema);
 }
 
+NvBool nvkms_sema_trydown(nvkms_sema_handle_t *sema)
+{
+    return down_trylock(&sema->os_sema) == 0;
+}
+
 /*************************************************************************
  * Procfs files support code.
  *************************************************************************/

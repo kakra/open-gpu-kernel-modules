@@ -84,6 +84,15 @@ struct NvKmsKapiDevice {
 
     nvkms_sema_handle_t *pSema;
 
+    /*
+     * Preallocated flip request reused by KmsFlip() (about 23 KB, which
+     * nvkms_alloc() would vmalloc on every flip validation and commit).
+     * Taken with pFlipParamsSema; commits on another head while it's in
+     * use allocate their own. NULL if it couldn't be allocated.
+     */
+    struct NvKmsFlipParams *pFlipParams;
+    nvkms_sema_handle_t *pFlipParamsSema;
+
     /* RM handles */
 
     NvU32 hRmClient;
