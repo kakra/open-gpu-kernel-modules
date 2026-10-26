@@ -61,6 +61,17 @@ extern NVEvoHAL nvEvoC9;
 extern NVEvoHAL nvEvoCA;
 extern NVEvoHAL nvDisplayless;
 
+/*!
+ * Whether the device's surface descriptors are plain context DMAs, allocated
+ * with nvCtxDmaAlloc() and bound with nvCtxDmaBind() (the EVO 3 HALs).
+ */
+NvBool nvEvoHalUsesCtxDmaSurfaceDescriptors(const NVDevEvoRec *pDevEvo)
+{
+    return (pDevEvo->hal == &nvEvoC5) ||
+           (pDevEvo->hal == &nvEvoC6) ||
+           (pDevEvo->hal == &nvEvoC8);
+}
+
 enum NvKmsAllocDeviceStatus nvAssignEvoCaps(NVDevEvoPtr pDevEvo)
 {
 #define ENTRY(_classPrefix,                                               \

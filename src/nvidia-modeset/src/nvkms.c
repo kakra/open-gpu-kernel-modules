@@ -2627,8 +2627,18 @@ static NvBool RegisterSurface(struct NvKmsPerOpen *pOpen,
         return FALSE;
     }
 
-    nvEvoRegisterSurface(pOpenDev->pDevEvo, pOpenDev, pParams,
-                         NvHsMapPermissionsReadOnly);
+    /*
+     * Kernel-space clients (nvidia-drm, through KAPI) hold the NVKMS PM lock
+     * across the ioctl, and they keep the device alive across their calls,
+     * so the RM calls can be made without the global NVKMS lock.
+     */
+    if (pOpen->clientType == NVKMS_CLIENT_KERNEL_SPACE) {
+        nvEvoRegisterSurfaceUnlockedRm(pOpenDev->pDevEvo, pOpenDev, pParams,
+                                       NvHsMapPermissionsReadOnly);
+    } else {
+        nvEvoRegisterSurface(pOpenDev->pDevEvo, pOpenDev, pParams,
+                             NvHsMapPermissionsReadOnly);
+    }
     return pParams->reply.surfaceHandle != 0;
 }
 
@@ -2654,10 +2664,18 @@ static NvBool UnregisterSurface(struct NvKmsPerOpen *pOpen,
         return FALSE;
     }
 
-    nvEvoUnregisterSurface(pOpenDev->pDevEvo, pOpenDev,
-                           pParams->request.surfaceHandle,
-                           FALSE /* skipUpdate */,
-                           pParams->request.skipSync);
+    /* See RegisterSurface(). */
+    if (pOpen->clientType == NVKMS_CLIENT_KERNEL_SPACE) {
+        nvEvoUnregisterSurfaceUnlockedRm(pOpenDev->pDevEvo, pOpenDev,
+                                         pParams->request.surfaceHandle,
+                                         FALSE /* skipUpdate */,
+                                         pParams->request.skipSync);
+    } else {
+        nvEvoUnregisterSurface(pOpenDev->pDevEvo, pOpenDev,
+                               pParams->request.surfaceHandle,
+                               FALSE /* skipUpdate */,
+                               pParams->request.skipSync);
+    }
     return TRUE;
 }
 
@@ -6693,6 +6711,8 @@ static void AllocSurfaceCtxDmasForAllOpens(NVDevEvoRec *pDevEvo)
 static void FreeSurfaceCtxDmasForAllOpens(NVDevEvoRec *pDevEvo)
 {
     struct NvKmsPerOpen *pOpen;
+
+    pDevEvo->surfaceDescGeneration++;
 
     nvListForEachEntry(pOpen, &perOpenIoctlList, perOpenIoctlListEntry) {
         struct NvKmsPerOpenDev *pOpenDev = DevEvoToOpenDev(pOpen, pDevEvo);
