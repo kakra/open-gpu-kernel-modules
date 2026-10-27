@@ -469,6 +469,24 @@ static NvBool nv_numa_node_has_memory(int node_id)
         NV_MEMDBG_ADD(ptr, size);              \
     }
 
+#define NV_KZALLOC_ATOMIC(ptr, size) \
+    { \
+        (ptr) = kzalloc(size, NV_GFP_ATOMIC); \
+        NV_MEMDBG_ADD(ptr, size);             \
+    }
+
+#define NV_KZALLOC_NO_OOM(ptr, size) \
+    { \
+        (ptr) = kzalloc(size, NV_GFP_NO_OOM); \
+        NV_MEMDBG_ADD(ptr, size);             \
+    }
+
+#define NV_KZALLOC_NORETRY(ptr, size) \
+    { \
+        (ptr) = kzalloc(size, NV_GFP_NORETRY); \
+        NV_MEMDBG_ADD(ptr, size);              \
+    }
+
 #define NV_KFREE(ptr, size) \
     { \
         NV_MEMDBG_REMOVE(ptr, size); \

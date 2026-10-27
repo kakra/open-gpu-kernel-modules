@@ -642,16 +642,21 @@ NV_STATUS NV_API_CALL os_alloc_mem(
     if (alloc_size != size)
         return NV_ERR_INVALID_PARAMETER;
 
+    //
+    // Return zeroed memory, so that RM behaves the same whether or not the
+    // kernel runs with init_on_alloc. The allocator does not zero twice when
+    // init_on_alloc is set.
+    //
     if (!NV_MAY_SLEEP())
     {
         if (alloc_size <= KMALLOC_LIMIT)
-            NV_KMALLOC_ATOMIC(*address, alloc_size);
+            NV_KZALLOC_ATOMIC(*address, alloc_size);
     }
     else
     {
         if (alloc_size <= PAGE_SIZE)
         {
-            NV_KMALLOC_NO_OOM(*address, alloc_size);
+            NV_KZALLOC_NO_OOM(*address, alloc_size);
         }
         else if (alloc_size <= KMALLOC_LIMIT)
         {
@@ -660,11 +665,11 @@ NV_STATUS NV_API_CALL os_alloc_mem(
             // retry reclaim and compaction for it, we fall back to vmalloc
             // anyway. This follows kvmalloc().
             //
-            NV_KMALLOC_NORETRY(*address, alloc_size);
+            NV_KZALLOC_NORETRY(*address, alloc_size);
         }
         if (*address == NULL)
         {
-            *address = nv_vmalloc(alloc_size, GFP_KERNEL);
+            *address = nv_vmalloc(alloc_size, GFP_KERNEL | __GFP_ZERO);
             alloc_size |= VMALLOC_ALLOCATION_SIZE_FLAG;
         }
     }
