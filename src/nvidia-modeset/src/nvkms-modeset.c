@@ -3163,9 +3163,17 @@ ApplyProposedModeSetStateOneApiHeadPreUpdate(
 
     /*
      * If nothing changed about this head's configuration, then there
-     * is nothing to do.
+     * is nothing to do, except re-arming the RG semaphore vblank interrupt:
+     * DisableVBlankRgSemaphoreInterruptsForModeset() disabled it on every
+     * head, including the ones this modeset doesn't touch, which would
+     * otherwise stop getting vblank callbacks.
      */
     if (!pProposedApiHead->changed) {
+        if (proposedPrimaryHead != NV_INVALID_HEAD) {
+            EnableVBlankRgSemaphoreInterruptOneApiHead(pDispEvo, apiHead,
+                                                       proposedPrimaryHead,
+                                                       updateState);
+        }
         return;
     }
 
