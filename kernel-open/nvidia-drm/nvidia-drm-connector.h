@@ -91,6 +91,7 @@ struct nv_drm_connector_state {
        enum nv_drm_dithering_mode dithering_mode;
        enum nv_drm_connector_color_format color_format;
        enum nv_drm_connector_output_bpc output_bpc;
+       enum nv_drm_broadcast_rgb broadcast_rgb;
        struct drm_property_blob *hdcp_topology_blob;
        struct drm_property_blob *hdmi_vsif_metadata;
        enum nv_drm_allm_mode allmMode;

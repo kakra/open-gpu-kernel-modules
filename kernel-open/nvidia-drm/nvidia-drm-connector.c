@@ -395,6 +395,7 @@ static struct drm_connector_state* nv_drm_connector_atomic_duplicate_state(struc
     nv_drm_new_connector_state->dithering_mode = nv_drm_old_connector_state->dithering_mode;
     nv_drm_new_connector_state->color_format = nv_drm_old_connector_state->color_format;
     nv_drm_new_connector_state->output_bpc = nv_drm_old_connector_state->output_bpc;
+    nv_drm_new_connector_state->broadcast_rgb = nv_drm_old_connector_state->broadcast_rgb;
     nv_drm_new_connector_state->hdcp_topology_blob = nv_drm_old_connector_state->hdcp_topology_blob;
     if (nv_drm_new_connector_state->hdcp_topology_blob) {
         drm_property_blob_get(nv_drm_new_connector_state->hdcp_topology_blob);
@@ -460,6 +461,12 @@ static int nv_drm_connector_atomic_set_property(
     } else if (property == nv_dev->nv_connector_output_bpc_property) {
         nv_connector_state->output_bpc = val;
         return 0;
+    } else if (property == nv_dev->nv_connector_broadcast_rgb_property) {
+        if (val >= NV_DRM_BROADCAST_RGB_MAX) {
+            return -EINVAL;
+        }
+        nv_connector_state->broadcast_rgb = val;
+        return 0;
     } else if (property == nv_dev->nv_hdcp_level_property) {
         // nv_hdcp_level_property is read only
         return -EINVAL;
@@ -515,6 +522,9 @@ static int nv_drm_connector_atomic_get_property(
         return 0;
     } else if (property == nv_dev->nv_connector_output_bpc_property) {
         *val = nv_connector_state->output_bpc;
+        return 0;
+    } else if (property == nv_dev->nv_connector_broadcast_rgb_property) {
+        *val = nv_connector_state->broadcast_rgb;
         return 0;
     } else if (property == nv_dev->nv_hdcp_level_property) {
         *val = nv_conn->cp;
@@ -762,6 +772,20 @@ __nv_drm_connector_atomic_check(struct drm_connector *connector,
         return ret;
     }
     req_config->modeSetConfig.colorBpc = nvkms_bpc;
+
+    /*
+     * Handle Broadcast RGB changes. The output color range is only applied by
+     * a modeset, like on the drivers using the DRM HDMI state helpers.
+     * "Automatic" is the NVKMS default, full range.
+     */
+    if (nv_old_connector_state->broadcast_rgb !=
+        nv_new_connector_state->broadcast_rgb) {
+        req_config->modeSetConfig.limitedColorRange =
+            (nv_new_connector_state->broadcast_rgb ==
+             NV_DRM_BROADCAST_RGB_LIMITED);
+        req_config->flags.colorRangeChanged = NV_TRUE;
+        crtc_state->mode_changed = true;
+    }
 
     /* Handle HDMI VSIF metadata changes */
     req_config->flags.hdmiVsifMetadataChanged =
@@ -1012,6 +1036,19 @@ nv_drm_connector_new(struct drm_device *dev,
         drm_connector_attach_hdr_output_metadata_property(&nv_connector->base);
     }
 #endif /* defined(NV_DRM_CONNECTOR_ATTACH_HDR_OUTPUT_METADATA_PROPERTY_PRESENT) */
+
+#if defined(NV_DRM_CONNECTOR_ATTACH_HDR_OUTPUT_METADATA_PROPERTY_PRESENT)
+    /* Applied in connector atomic_check, so only on the kernels that have it */
+    if ((nv_connector->type == NVKMS_CONNECTOR_TYPE_DP) ||
+        (nv_connector->type == NVKMS_CONNECTOR_TYPE_HDMI) ||
+        (nv_connector->type == NVKMS_CONNECTOR_TYPE_DVI_D) ||
+        (nv_connector->type == NVKMS_CONNECTOR_TYPE_DVI_I) ||
+        (nv_connector->type == NVKMS_CONNECTOR_TYPE_USBC)) {
+        drm_object_attach_property(&nv_connector->base.base,
+                                   nv_dev->nv_connector_broadcast_rgb_property,
+                                   NV_DRM_BROADCAST_RGB_AUTO);
+    }
+#endif
 
     /* Attach dithering mode property */
     if (nv_dev->nv_connector_dithering_mode_property) {
