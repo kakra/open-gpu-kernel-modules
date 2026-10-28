@@ -4353,6 +4353,21 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_DRM_CONNECTOR_FUNCS_HAVE_DEBUGFS_INIT" "" "types"
         ;;
 
+        drm_connector_state_has_color_format)
+            #
+            # Determine if 'struct drm_connector_state' has a 'color_format'
+            # member; DRM core flags the CRTC for a modeset when it changes.
+            #
+            CODE="
+            #include <drm/drm_crtc.h>
+            #include <drm/drm_connector.h>
+            int conftest_drm_connector_state_has_color_format(void) {
+                return offsetof(struct drm_connector_state, color_format);
+            }"
+
+            compile_check_conftest "$CODE" "NV_DRM_CONNECTOR_STATE_HAS_COLOR_FORMAT" "" "types"
+        ;;
+
         iommu_sva_bind_device_has_drvdata_arg)
             #
             # Check if iommu_sva_bind_device() has drvdata parameter.

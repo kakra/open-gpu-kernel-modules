@@ -3655,9 +3655,10 @@ static void SetRequestedColorRange(
 }
 
 /*
- * Store the requested bpc limit on the displays. Like the color range, the
- * modeset that follows applies it, and a limit can't make a mode fail that
- * passes without it, so a TEST_ONLY check skips it.
+ * Store the requested bpc limit on the displays; the next modeset applies it.
+ * nvidia-drm skips the modeset when the limit keeps the current bpc, so this
+ * is done for flips too. A limit can't make a mode fail that passes without
+ * it, so a TEST_ONLY check skips it.
  */
 static void SetRequestedColorBpcMax(
     struct NvKmsKapiDevice *device,
@@ -3824,7 +3825,6 @@ static NvBool KmsSetMode(
     /* The range can't make a modeset fail, so a TEST_ONLY check skips it */
     if (commit) {
         SetRequestedColorRange(device, requestedConfig);
-        SetRequestedColorBpcMax(device, requestedConfig);
     }
 
     status = nvkms_ioctl_from_kapi_try_pmlock(device->pKmsOpen,
@@ -4184,9 +4184,12 @@ static NvBool ApplyModeSetConfig(
     /*
      * The content type is sent without a modeset, so set it for flips too.
      * A modeset sends the AVI InfoFrame of newly driven displays with it.
+     * The bpc limit can change without a modeset too, and has to be stored
+     * before a modeset applies it.
      */
     if (commit) {
         SetContentType(device, requestedConfig);
+        SetRequestedColorBpcMax(device, requestedConfig);
     }
 
     if (bRequiredModeset) {
