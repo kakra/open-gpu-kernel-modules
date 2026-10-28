@@ -323,15 +323,29 @@ GetColorFormatAndColorRange(
      * Choose current color format and colorRange based on the current mode
      * timings and the requested color format and range.
      */
-    return nvChooseCurrentColorFormatAndRangeEvo(pOneArbitraryDpyEvo,
-                                                 pRequestHead->mode.timings.yuv420Mode,
-                                                 colorimetry,
-                                                 requestedColorFormat,
-                                                 requestedColorBpc,
-                                                 requestedColorRange,
-                                                 &pDpyColor->format,
-                                                 &pDpyColor->bpc,
-                                                 &pDpyColor->range);
+    if (!nvChooseCurrentColorFormatAndRangeEvo(pOneArbitraryDpyEvo,
+                                               pRequestHead->mode.timings.yuv420Mode,
+                                               colorimetry,
+                                               requestedColorFormat,
+                                               requestedColorBpc,
+                                               requestedColorRange,
+                                               &pDpyColor->format,
+                                               &pDpyColor->bpc,
+                                               &pDpyColor->range)) {
+        return FALSE;
+    }
+
+    /*
+     * Start from at most the requested bpc limit. The bpc stays unspecified,
+     * so mode validation can still lower it further to fit the link.
+     */
+    if (!pRequestHead->colorBpcSpecified) {
+        nvLimitColorBpcEvo(pOneArbitraryDpyEvo,
+                           pOneArbitraryDpyEvo->requestedColorBpcMax,
+                           pDpyColor);
+    }
+
+    return TRUE;
 }
 
 static NvBool AssignProposedModeSetColorFormatAndColorRangeSpecified(

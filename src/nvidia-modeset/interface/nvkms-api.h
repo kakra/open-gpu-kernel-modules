@@ -2761,6 +2761,16 @@ enum NvKmsDpyAttribute {
     NV_KMS_DPY_ATTRIBUTE_DISPLAYPORT_SINK_IS_AUDIO_CAPABLE,
 
     NV_KMS_DPY_ATTRIBUTE_NUMBER_OF_HARDWARE_HEADS_USED,
+
+    /*
+     * Upper limit for the output color bpc, like the DRM "max bpc" connector
+     * property. Takes an NvKmsDpyAttributeColorBpcValue;
+     * NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN means no limit. Applied
+     * by the next modeset that doesn't request a specific bpc: NVKMS then
+     * picks the highest bpc up to the limit that the display and the link
+     * support, but never less than the colorimetry requires.
+     */
+    NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_BPC_MAX,
 };
 
 /*

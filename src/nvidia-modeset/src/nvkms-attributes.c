@@ -498,6 +498,20 @@ static void DpyPostColorFormatOrRangeSetEvo(NVDpyEvoPtr pDpyEvo)
         return;
     }
 
+    {
+        NVDpyAttributeColor limitedDpyColor = pApiHeadState->attributes.color;
+
+        limitedDpyColor.format = colorFormat;
+        limitedDpyColor.bpc = colorBpc;
+        limitedDpyColor.range = colorRange;
+
+        nvLimitColorBpcEvo(pDpyEvo, pDpyEvo->requestedColorBpcMax,
+                           &limitedDpyColor);
+
+        colorBpc = limitedDpyColor.bpc;
+        colorRange = limitedDpyColor.range;
+    }
+
     colorFormatChanged = (pApiHeadState->attributes.color.format != colorFormat);
     colorBpcChanged = (pApiHeadState->attributes.color.bpc != colorBpc);
 
@@ -745,6 +759,58 @@ static NvBool GetColorBpcValidValues(
                 NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_12);
 
     pValidValues->u.bits.ints =
+        NVBIT(NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_6)  |
+        NVBIT(NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8)  |
+        NVBIT(NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10) |
+        NVBIT(NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_12);
+
+    return TRUE;
+}
+
+static NvBool IsValidColorBpcMax(NvS64 value)
+{
+    switch (value) {
+        case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN:
+        case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_6:
+        case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8:
+        case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10:
+        case NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_12:
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
+/*
+ * The limit is applied by the next modeset, like the DRM "max bpc" property
+ * that it implements.
+ */
+static NvBool SetRequestedColorBpcMax(NVDpyEvoRec *pDpyEvo, NvS64 value)
+{
+    if (!IsValidColorBpcMax(value)) {
+        return FALSE;
+    }
+
+    pDpyEvo->requestedColorBpcMax = value;
+
+    return TRUE;
+}
+
+static NvBool GetRequestedColorBpcMax(const NVDpyEvoRec *pDpyEvo,
+                                      NvS64 *pValue)
+{
+    *pValue = pDpyEvo->requestedColorBpcMax;
+    return TRUE;
+}
+
+static NvBool GetRequestedColorBpcMaxValidValues(
+    const NVDpyEvoRec *pDpyEvo,
+    struct NvKmsAttributeValidValuesCommonReply *pValidValues)
+{
+    nvAssert(pValidValues->type == NV_KMS_ATTRIBUTE_TYPE_INTBITS);
+
+    pValidValues->u.bits.ints =
+        NVBIT(NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN) |
         NVBIT(NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_6)  |
         NVBIT(NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_8)  |
         NVBIT(NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_10) |
@@ -1320,6 +1386,12 @@ static const struct {
         .get            = GetNumberOfHardwareHeadsUsed,
         .getValidValues = NULL,
         .type           = NV_KMS_ATTRIBUTE_TYPE_INTEGER,
+    },
+    [NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_BPC_MAX] = {
+        .set            = SetRequestedColorBpcMax,
+        .get            = GetRequestedColorBpcMax,
+        .getValidValues = GetRequestedColorBpcMaxValidValues,
+        .type           = NV_KMS_ATTRIBUTE_TYPE_INTBITS,
     },
 };
 

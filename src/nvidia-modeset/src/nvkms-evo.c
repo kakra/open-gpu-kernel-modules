@@ -6977,6 +6977,34 @@ static NvBool DowngradeColorBpc(
     return TRUE;
 }
 
+/*
+ * Lower pDpyColor->bpc to at most maxBpc in the same color format, as far as
+ * the display supports it and the colorimetry allows. A limit the display
+ * can't reach is approximated as closely as possible rather than failed.
+ */
+void nvLimitColorBpcEvo(const NVDpyEvoRec *pDpyEvo,
+                        enum NvKmsDpyAttributeColorBpcValue maxBpc,
+                        NVDpyAttributeColor *pDpyColor)
+{
+    const NvKmsDpyOutputColorFormatInfo supportedColorFormats =
+        nvDpyGetOutputColorFormatInfo(pDpyEvo);
+
+    if (maxBpc == NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN) {
+        return;
+    }
+
+    while (pDpyColor->bpc > maxBpc) {
+        NVDpyAttributeColor dpyColor = *pDpyColor;
+
+        if (!DowngradeColorBpc(pDpyEvo, &supportedColorFormats, &dpyColor) ||
+            (dpyColor.bpc < GetMinRequiredBpc(dpyColor.colorimetry))) {
+            break;
+        }
+
+        *pDpyColor = dpyColor;
+    }
+}
+
 NvBool nvDowngradeColorFormatAndBpc(
     const NVDpyEvoRec *pDpyEvo,
     const NvKmsDpyOutputColorFormatInfo *pSupportedColorFormats,

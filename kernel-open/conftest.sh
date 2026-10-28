@@ -4337,6 +4337,22 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_DRM_CONNECTOR_HAS_OVERRIDE_EDID" "" "types"
         ;;
 
+        drm_connector_funcs_have_debugfs_init)
+            #
+            # Determine if 'struct drm_connector_funcs' has a 'debugfs_init'
+            # member, called to add files to the connector's debugfs
+            # directory.
+            #
+            CODE="
+            #include <drm/drm_crtc.h>
+            #include <drm/drm_connector.h>
+            int conftest_drm_connector_funcs_have_debugfs_init(void) {
+                return offsetof(struct drm_connector_funcs, debugfs_init);
+            }"
+
+            compile_check_conftest "$CODE" "NV_DRM_CONNECTOR_FUNCS_HAVE_DEBUGFS_INIT" "" "types"
+        ;;
+
         iommu_sva_bind_device_has_drvdata_arg)
             #
             # Check if iommu_sva_bind_device() has drvdata parameter.

@@ -3648,6 +3648,104 @@ static void SetRequestedColorRange(
     }
 }
 
+/*
+ * Store the requested bpc limit on the displays. Like the color range, the
+ * modeset that follows applies it, and a limit can't make a mode fail that
+ * passes without it, so a TEST_ONLY check skips it.
+ */
+static void SetRequestedColorBpcMax(
+    struct NvKmsKapiDevice *device,
+    const struct NvKmsKapiRequestedModeSetConfig *requestedConfig)
+{
+    NvU32 head;
+
+    for (head = 0;
+         head < ARRAY_LEN(requestedConfig->headRequestedConfig); head++) {
+
+        const struct NvKmsKapiHeadRequestedConfig *headRequestedConfig =
+            &requestedConfig->headRequestedConfig[head];
+        const struct NvKmsKapiHeadModeSetConfig *headModeSetConfig =
+            &headRequestedConfig->modeSetConfig;
+        NvU32 i;
+
+        if ((requestedConfig->headsMask & (1 << head)) == 0x0 ||
+            !headRequestedConfig->flags.maxBpcChanged) {
+            continue;
+        }
+
+        for (i = 0; i < headModeSetConfig->numDisplays; i++) {
+            struct NvKmsSetDpyAttributeParams params = { };
+
+            params.request.deviceHandle = device->hKmsDevice;
+            params.request.dispHandle = device->hKmsDisp;
+            params.request.dpyId =
+                nvNvU32ToDpyId(headModeSetConfig->displays[i]);
+            params.request.attribute =
+                NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_BPC_MAX;
+            params.request.value = headModeSetConfig->maxBpc;
+
+            if (!nvkms_ioctl_from_kapi_try_pmlock(device->pKmsOpen,
+                                                  NVKMS_IOCTL_SET_DPY_ATTRIBUTE,
+                                                  &params, sizeof(params))) {
+                nvKmsKapiLogDeviceDebug(
+                    device,
+                    "Failed to set the bpc limit of display 0x%08x",
+                    headModeSetConfig->displays[i]);
+            }
+        }
+    }
+}
+
+static NvBool GetDisplayAttribute(
+    struct NvKmsKapiDevice *device,
+    NvKmsKapiDisplay display,
+    enum NvKmsDpyAttribute attribute,
+    NvS64 *pValue)
+{
+    struct NvKmsGetDpyAttributeParams params = { };
+
+    params.request.deviceHandle = device->hKmsDevice;
+    params.request.dispHandle = device->hKmsDisp;
+    params.request.dpyId = nvNvU32ToDpyId(display);
+    params.request.attribute = attribute;
+
+    if (!nvkms_ioctl_from_kapi(device->pKmsOpen,
+                               NVKMS_IOCTL_GET_DPY_ATTRIBUTE,
+                               &params, sizeof(params))) {
+        return NV_FALSE;
+    }
+
+    *pValue = params.reply.value;
+
+    return NV_TRUE;
+}
+
+static NvBool GetDisplayColorBpc(
+    struct NvKmsKapiDevice *device,
+    NvKmsKapiDisplay display,
+    NvU32 *pBpc,
+    NvU32 *pMaxBpc)
+{
+    NvS64 bpc, maxBpc;
+
+    if (device->hKmsDevice == 0x0) {
+        return NV_FALSE;
+    }
+
+    if (!GetDisplayAttribute(device, display,
+                             NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC, &bpc) ||
+        !GetDisplayAttribute(device, display,
+                             NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_BPC_MAX,
+                             &maxBpc)) {
+        return NV_FALSE;
+    }
+
+    *pBpc = bpc;
+    *pMaxBpc = maxBpc;
+
+    return NV_TRUE;
+}
+
 static NvBool KmsSetMode(
     struct NvKmsKapiDevice *device,
     const struct NvKmsKapiRequestedModeSetConfig *requestedConfig,
@@ -3673,6 +3771,7 @@ static NvBool KmsSetMode(
     /* The range can't make a modeset fail, so a TEST_ONLY check skips it */
     if (commit) {
         SetRequestedColorRange(device, requestedConfig);
+        SetRequestedColorBpcMax(device, requestedConfig);
     }
 
     status = nvkms_ioctl_from_kapi_try_pmlock(device->pKmsOpen,
@@ -4422,6 +4521,8 @@ NvBool nvKmsKapiGetFunctionsTableInternal
     funcsTable->unregisterVblankIntrCallback = UnregisterVblankIntrCallback;
 
     funcsTable->perfBoost = RmPerfBoost;
+
+    funcsTable->getDisplayColorBpc = GetDisplayColorBpc;
 
     return NV_TRUE;
 }

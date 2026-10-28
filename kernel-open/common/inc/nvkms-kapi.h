@@ -425,6 +425,13 @@ struct NvKmsKapiHeadModeSetConfig {
      */
     NvBool limitedColorRange;
 
+    /*
+     * Upper limit for the output bpc of the displays (6, 8, 10 or 12), 0 for
+     * no limit; the DRM "max bpc" property. NVKMS picks the highest bpc up to
+     * it that the display and the link support.
+     */
+    NvU8 maxBpc;
+
     NvBool postcompColorPassthrough;
 };
 
@@ -440,6 +447,7 @@ struct NvKmsKapiHeadRequestedConfig {
         NvBool olutFpNormScaleChanged          : 1;
         NvBool ditheringChanged                : 1;
         NvBool colorRangeChanged               : 1;
+        NvBool maxBpcChanged                   : 1;
         NvBool hdmiVsifMetadataChanged         : 1;
         NvBool postcompColorPassthroughChanged : 1;
     } flags;
@@ -1695,6 +1703,27 @@ struct NvKmsKapiFunctionsTable {
     NvBool (*perfBoost)(
         const struct NvKmsKapiDevice *device,
         NvU32 durationSec
+    );
+
+    /*!
+     * Query the output color bpc that a display is currently driven with,
+     * and the bpc limit stored for it.
+     *
+     * \param [in]  device   A device allocated using allocateDevice().
+     *
+     * \param [in]  display  The display to query.
+     *
+     * \param [out] pBpc     The current bpc, 0 if unknown.
+     *
+     * \param [out] pMaxBpc  The bpc limit, 0 for none.
+     *
+     * \return NV_TRUE on success, NV_FALSE on failure.
+     */
+    NvBool (*getDisplayColorBpc)(
+        struct NvKmsKapiDevice *device,
+        NvKmsKapiDisplay display,
+        NvU32 *pBpc,
+        NvU32 *pMaxBpc
     );
 };
 
