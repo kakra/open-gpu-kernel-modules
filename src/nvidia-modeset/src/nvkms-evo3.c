@@ -122,9 +122,9 @@ static const struct NvKmsCscMatrix FMTMatrix[FMT_COEFF_TYPE_MAX] =
 
     // FMT_COEFF_TYPE_REC601_YUV_8BPC_FULL_TO_RGB_16BPC_FULL
     {{
-        {  0x1684C,  0x100FD,        0, 0x1F4D42 },
-        { 0x1F487A,  0x100FD, 0x1FA790,   0x86EB },
-        {        0,  0x100FD,  0x1C762, 0x1F1E16 }
+        {  0x1684C,  0x100FD,        0, 0x1F4BDA },
+        { 0x1F487A,  0x100FD, 0x1FA790,   0x87FB },
+        {        0,  0x100FD,  0x1C762, 0x1F1C4F }
     }},
 
     // FMT_COEFF_TYPE_REC601_YUV_10BPC_LTD_TO_RGB_16BPC_FULL
@@ -136,9 +136,9 @@ static const struct NvKmsCscMatrix FMTMatrix[FMT_COEFF_TYPE_MAX] =
 
     // FMT_COEFF_TYPE_REC601_YUV_10BPC_FULL_TO_RGB_16BPC_FULL
     {{
-        {  0x1673E,  0x1003C,        0, 0x1F4CBB },
-        { 0x1F4903,  0x1003C, 0x1FA7D2,   0x8751 },
-        {        0,  0x1003C,  0x1C60C, 0x1F1D6B }
+        {  0x1673E,  0x1003C,        0, 0x1F4C61 },
+        { 0x1F4903,  0x1003C, 0x1FA7D2,   0x8796 },
+        {        0,  0x1003C,  0x1C60C, 0x1F1CFA }
     }},
 
     // FMT_COEFF_TYPE_REC601_YUV_12BPC_LTD_TO_RGB_16BPC_FULL
@@ -150,9 +150,9 @@ static const struct NvKmsCscMatrix FMTMatrix[FMT_COEFF_TYPE_MAX] =
 
     // FMT_COEFF_TYPE_REC601_YUV_12BPC_FULL_TO_RGB_16BPC_FULL
     {{
-        {  0x166FA,  0x1000C,        0, 0x1F4C99 },
-        { 0x1F4926,  0x1000C, 0x1FA7E3,   0x876B },
-        {        0,  0x1000C,  0x1C5B7, 0x1F1D41 }
+        {  0x166FA,  0x1000C,        0, 0x1F4C83 },
+        { 0x1F4926,  0x1000C, 0x1FA7E3,   0x877C },
+        {        0,  0x1000C,  0x1C5B7, 0x1F1D25 }
     }},
 
     // FMT_COEFF_TYPE_REC709_YUV_8BPC_LTD_TO_RGB_16BPC_FULL
@@ -164,9 +164,9 @@ static const struct NvKmsCscMatrix FMTMatrix[FMT_COEFF_TYPE_MAX] =
 
     // FMT_COEFF_TYPE_REC709_YUV_8BPC_FULL_TO_RGB_16BPC_FULL
     {{
-        {  0x194B4,  0x100FD,        0, 0x1F373A },
-        { 0x1F87B3,  0x100FD, 0x1FCFDC,   0x5390 },
-        {        0,  0x100FD,  0x1DCDE, 0x1F136E }
+        {  0x194B4,  0x100FD,        0, 0x1F35A6 },
+        { 0x1F87B3,  0x100FD, 0x1FCFDC,   0x5439 },
+        {        0,  0x100FD,  0x1DCDE, 0x1F1191 }
     }},
 
     // FMT_COEFF_TYPE_REC709_YUV_10BPC_LTD_TO_RGB_16BPC_FULL
@@ -178,9 +178,9 @@ static const struct NvKmsCscMatrix FMTMatrix[FMT_COEFF_TYPE_MAX] =
 
     // FMT_COEFF_TYPE_REC709_YUV_10BPC_FULL_TO_RGB_16BPC_FULL
     {{
-        {  0x19385,  0x1003C,        0, 0x1F36A3 },
-        { 0x1F880D,  0x1003C, 0x1FD000,   0x53CF },
-        {        0,  0x1003C,  0x1DB78, 0x1F12BB }
+        {  0x19385,  0x1003C,        0, 0x1F363E },
+        { 0x1F880D,  0x1003C, 0x1FD000,   0x53FA },
+        {        0,  0x1003C,  0x1DB78, 0x1F1244 }
     }},
 
     // FMT_COEFF_TYPE_REC709_YUV_12BPC_LTD_TO_RGB_16BPC_FULL
@@ -192,9 +192,9 @@ static const struct NvKmsCscMatrix FMTMatrix[FMT_COEFF_TYPE_MAX] =
 
     // FMT_COEFF_TYPE_REC709_YUV_12BPC_FULL_TO_RGB_16BPC_FULL
     {{
-        {  0x19339,  0x1000C,        0, 0x1F367D },
-        { 0x1F8823,  0x1000C, 0x1FD009,   0x53DF },
-        {        0,  0x1000C,  0x1DB1F, 0x1F128E }
+        {  0x19339,  0x1000C,        0, 0x1F3664 },
+        { 0x1F8823,  0x1000C, 0x1FD009,   0x53EA },
+        {        0,  0x1000C,  0x1DB1F, 0x1F1271 }
     }},
 
     // FMT_COEFF_TYPE_REC2020_YUV_8BPC_LTD_TO_RGB_16BPC_FULL
@@ -206,9 +206,9 @@ static const struct NvKmsCscMatrix FMTMatrix[FMT_COEFF_TYPE_MAX] =
 
     // FMT_COEFF_TYPE_REC2020_YUV_8BPC_FULL_TO_RGB_16BPC_FULL
     {{
-        {  0x17AF4,  0x100FD,        0, 0x1F4401 },
-        { 0x1F6D2B,  0x100FD, 0x1FD5B6,   0x5DD2 },
-        {        0,  0x100FD,  0x1E37F, 0x1F1024 }
+        {  0x17AF4,  0x100FD,        0, 0x1F4286 },
+        { 0x1F6D2B,  0x100FD, 0x1FD5B6,   0x5E90 },
+        {        0,  0x100FD,  0x1E37F, 0x1F0E41 }
     }},
 
     // FMT_COEFF_TYPE_REC2020_YUV_10BPC_LTD_TO_RGB_16BPC_FULL
@@ -220,9 +220,9 @@ static const struct NvKmsCscMatrix FMTMatrix[FMT_COEFF_TYPE_MAX] =
 
     // FMT_COEFF_TYPE_REC2020_YUV_10BPC_FULL_TO_RGB_16BPC_FULL
     {{
-        {  0x179D8,  0x1003C,        0, 0x1F4372 },
-        { 0x1F6D99,  0x1003C, 0x1FD5D6,   0x5E19 },
-        {        0,  0x1003C,  0x1E214, 0x1F0F6E }
+        {  0x179D8,  0x1003C,        0, 0x1F4314 },
+        { 0x1F6D99,  0x1003C, 0x1FD5D6,   0x5E49 },
+        {        0,  0x1003C,  0x1E214, 0x1F0EF6 }
     }},
 
     // FMT_COEFF_TYPE_REC2020_YUV_12BPC_LTD_TO_RGB_16BPC_FULL
@@ -234,9 +234,9 @@ static const struct NvKmsCscMatrix FMTMatrix[FMT_COEFF_TYPE_MAX] =
 
     // FMT_COEFF_TYPE_REC2020_YUV_12BPC_FULL_TO_RGB_16BPC_FULL
     {{
-        {  0x17991,  0x1000C,        0, 0x1F434F },
-        { 0x1F6DB5,  0x1000C, 0x1FD5DE,   0x5E2B },
-        {        0,  0x1000C,  0x1E1BA, 0x1F0F41 }
+        {  0x17991,  0x1000C,        0, 0x1F4338 },
+        { 0x1F6DB5,  0x1000C, 0x1FD5DE,   0x5E37 },
+        {        0,  0x1000C,  0x1E1BA, 0x1F0F23 }
     }},
 };
 
