@@ -361,6 +361,11 @@ static struct drm_connector_state* nv_drm_connector_atomic_duplicate_state(struc
 
     nv_drm_new_connector_state->dithering_mode = nv_drm_old_connector_state->dithering_mode;
     nv_drm_new_connector_state->broadcast_rgb = nv_drm_old_connector_state->broadcast_rgb;
+    nv_drm_new_connector_state->underscan = nv_drm_old_connector_state->underscan;
+    nv_drm_new_connector_state->underscan_hborder =
+        nv_drm_old_connector_state->underscan_hborder;
+    nv_drm_new_connector_state->underscan_vborder =
+        nv_drm_old_connector_state->underscan_vborder;
     nv_drm_new_connector_state->hdcp_topology_blob = nv_drm_old_connector_state->hdcp_topology_blob;
     if (nv_drm_new_connector_state->hdcp_topology_blob) {
         drm_property_blob_get(nv_drm_new_connector_state->hdcp_topology_blob);
@@ -423,6 +428,18 @@ static int nv_drm_connector_atomic_set_property(
         }
         nv_connector_state->broadcast_rgb = val;
         return 0;
+    } else if (property == nv_dev->nv_connector_underscan_property) {
+        if (val >= NV_DRM_UNDERSCAN_MAX) {
+            return -EINVAL;
+        }
+        nv_connector_state->underscan = val;
+        return 0;
+    } else if (property == nv_dev->nv_connector_underscan_hborder_property) {
+        nv_connector_state->underscan_hborder = val;
+        return 0;
+    } else if (property == nv_dev->nv_connector_underscan_vborder_property) {
+        nv_connector_state->underscan_vborder = val;
+        return 0;
     } else if (property == nv_dev->nv_hdcp_level_property) {
         // nv_hdcp_level_property is read only
         return -EINVAL;
@@ -458,6 +475,15 @@ static int nv_drm_connector_atomic_get_property(
         return 0;
     } else if (property == nv_dev->nv_connector_broadcast_rgb_property) {
         *val = nv_connector_state->broadcast_rgb;
+        return 0;
+    } else if (property == nv_dev->nv_connector_underscan_property) {
+        *val = nv_connector_state->underscan;
+        return 0;
+    } else if (property == nv_dev->nv_connector_underscan_hborder_property) {
+        *val = nv_connector_state->underscan_hborder;
+        return 0;
+    } else if (property == nv_dev->nv_connector_underscan_vborder_property) {
+        *val = nv_connector_state->underscan_vborder;
         return 0;
     } else if (property == nv_dev->nv_hdcp_level_property) {
         *val = nv_conn->cp;
@@ -839,11 +865,18 @@ __nv_drm_connector_atomic_check(struct drm_connector *connector,
     }
 
     /*
-     * Handle "scaling mode". It decides the raster timings and the viewport
-     * the encoder check derives from the mode, so it needs a modeset.
+     * Handle "scaling mode" and underscan. They decide the raster timings
+     * and the viewport the encoder check derives from the mode, so they need
+     * a modeset.
      */
-    if (old_connector_state->scaling_mode !=
-        new_connector_state->scaling_mode) {
+    if ((old_connector_state->scaling_mode !=
+         new_connector_state->scaling_mode) ||
+        (nv_old_connector_state->underscan !=
+         nv_new_connector_state->underscan) ||
+        (nv_old_connector_state->underscan_hborder !=
+         nv_new_connector_state->underscan_hborder) ||
+        (nv_old_connector_state->underscan_vborder !=
+         nv_new_connector_state->underscan_vborder)) {
         crtc_state->mode_changed = true;
     }
 
@@ -1117,6 +1150,22 @@ nv_drm_connector_new(struct drm_device *dev,
             nv_dev,
             "Failed to attach the scaling mode property to connector created from physical index %u",
             nv_connector->physicalIndex);
+    }
+
+    /*
+     * Underscan, for TVs that crop the picture edges: the head scaler
+     * shrinks the image by the borders, like on amdgpu.
+     */
+    if (nv_drm_scaling_mode_module_param) {
+        drm_object_attach_property(&nv_connector->base.base,
+                                   nv_dev->nv_connector_underscan_property,
+                                   NV_DRM_UNDERSCAN_OFF);
+        drm_object_attach_property(&nv_connector->base.base,
+                                   nv_dev->nv_connector_underscan_hborder_property,
+                                   0);
+        drm_object_attach_property(&nv_connector->base.base,
+                                   nv_dev->nv_connector_underscan_vborder_property,
+                                   0);
     }
 #endif
 

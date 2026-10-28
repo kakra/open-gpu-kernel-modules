@@ -518,6 +518,15 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
           .name = "Limited 16:235" },
     };
 
+    const struct drm_prop_enum_list underscan_enum_list[] = {
+        { .type = NV_DRM_UNDERSCAN_OFF,
+          .name = "off" },
+        { .type = NV_DRM_UNDERSCAN_ON,
+          .name = "on" },
+        { .type = NV_DRM_UNDERSCAN_AUTO,
+          .name = "auto" },
+    };
+
     const struct drm_prop_enum_list hdcp_level_enum_list[] = {
         { .type = NVKMS_CONTENT_PROTECTION_OFF,
           .name = "HDCP_OFF" },
@@ -688,6 +697,26 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
                                  ARRAY_SIZE(broadcast_rgb_enum_list));
     if (nv_dev->nv_connector_broadcast_rgb_property == NULL) {
         NV_DRM_LOG_ERR("Failed to create Broadcast RGB property");
+        return -ENOMEM;
+    }
+
+    nv_dev->nv_connector_underscan_property =
+        drm_property_create_enum(nv_dev->dev, 0,
+                                 "underscan",
+                                 underscan_enum_list,
+                                 ARRAY_SIZE(underscan_enum_list));
+    nv_dev->nv_connector_underscan_hborder_property =
+        drm_property_create_range(nv_dev->dev, 0,
+                                  "underscan hborder",
+                                  0, NV_DRM_UNDERSCAN_BORDER_MAX);
+    nv_dev->nv_connector_underscan_vborder_property =
+        drm_property_create_range(nv_dev->dev, 0,
+                                  "underscan vborder",
+                                  0, NV_DRM_UNDERSCAN_BORDER_MAX);
+    if ((nv_dev->nv_connector_underscan_property == NULL) ||
+        (nv_dev->nv_connector_underscan_hborder_property == NULL) ||
+        (nv_dev->nv_connector_underscan_vborder_property == NULL)) {
+        NV_DRM_LOG_ERR("Failed to create underscan properties");
         return -ENOMEM;
     }
 
