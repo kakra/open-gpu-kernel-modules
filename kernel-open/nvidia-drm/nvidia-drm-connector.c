@@ -880,6 +880,23 @@ __nv_drm_connector_atomic_check(struct drm_connector *connector,
         crtc_state->mode_changed = true;
     }
 
+    /*
+     * Handle "content type". It only changes the AVI InfoFrame, so unlike
+     * the properties above it doesn't need a modeset; compositors set it in
+     * their page flip commits. Pass it with every modeset too, so it also
+     * reaches a display that is newly driven by this CRTC or was recreated
+     * by a hotplug. The DRM values are the NVKMS values minus one (NVKMS 0
+     * keeps its own default).
+     */
+    if ((connector->dev->mode_config.content_type_property != NULL) &&
+        ((old_connector_state->content_type !=
+          new_connector_state->content_type) ||
+         drm_atomic_crtc_needs_modeset(crtc_state))) {
+        req_config->modeSetConfig.contentType =
+            new_connector_state->content_type + 1;
+        req_config->flags.contentTypeChanged = NV_TRUE;
+    }
+
     /* Handle HDMI VSIF metadata changes */
     req_config->flags.hdmiVsifMetadataChanged =
         !nv_drm_blobs_equal(nv_old_connector_state->hdmi_vsif_metadata,
@@ -1151,6 +1168,14 @@ nv_drm_connector_new(struct drm_device *dev,
             drm_connector_attach_colorspace_property(&nv_connector->base);
         }
         drm_connector_attach_hdr_output_metadata_property(&nv_connector->base);
+
+        /* Signalled in the AVI InfoFrame, so HDMI only, like on i915 */
+        if (drm_connector_attach_content_type_property(&nv_connector->base) != 0) {
+            NV_DRM_DEV_LOG_ERR(
+                nv_dev,
+                "Failed to attach the content type property to connector created from physical index %u",
+                nv_connector->physicalIndex);
+        }
 
         if (nv_dev->nv_connector_hdmi_vsif_metadata_property) {
             drm_object_attach_property(&nv_connector->base.base,
