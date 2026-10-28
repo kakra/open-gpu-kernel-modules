@@ -2275,6 +2275,11 @@ nv_drm_plane_atomic_duplicate_state(struct drm_plane *plane)
     }
 #endif
 
+    nv_plane_state->fmt_ctm = nv_old_plane_state->fmt_ctm;
+    if (nv_plane_state->fmt_ctm) {
+        drm_property_blob_get(nv_plane_state->fmt_ctm);
+    }
+
     nv_plane_state->lms_ctm = nv_old_plane_state->lms_ctm;
     if (nv_plane_state->lms_ctm) {
         drm_property_blob_get(nv_plane_state->lms_ctm);
@@ -2339,6 +2344,7 @@ static inline void __nv_drm_plane_atomic_destroy_state(
 #if defined(NV_DRM_HAS_HDR_OUTPUT_METADATA)
     drm_property_blob_put(nv_drm_plane_state->hdr_output_metadata);
 #endif
+    drm_property_blob_put(nv_drm_plane_state->fmt_ctm);
     drm_property_blob_put(nv_drm_plane_state->lms_ctm);
     drm_property_blob_put(nv_drm_plane_state->lms_to_itp_ctm);
     drm_property_blob_put(nv_drm_plane_state->itp_to_lms_ctm);
