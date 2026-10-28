@@ -480,7 +480,7 @@ static void nv_drm_enumerate_encoders_and_connectors
  */
 static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
 {
-    const struct drm_prop_enum_list colorspace_enum_list[] = {
+    static const struct drm_prop_enum_list colorspace_enum_list[] = {
         { .type = NV_DRM_INPUT_COLOR_SPACE_NONE,
           .name = "None" },
         { .type = NV_DRM_INPUT_COLOR_SPACE_SCRGB_LINEAR,
@@ -489,7 +489,7 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
           .name = "BT.2100 PQ" },
     };
 
-    const struct drm_prop_enum_list tf_enum_list[] = {
+    static const struct drm_prop_enum_list tf_enum_list[] = {
         { .type = NV_DRM_TRANSFER_FUNCTION_LINEAR,
           .name = "Linear" },
         { .type = NV_DRM_TRANSFER_FUNCTION_PQ,
@@ -498,7 +498,7 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
           .name = "Default" },
     };
 
-    const struct drm_prop_enum_list dithering_mode_enum_list[] = {
+    static const struct drm_prop_enum_list dithering_mode_enum_list[] = {
         { .type = NV_DRM_DITHERING_MODE_AUTO,
           .name = "auto" },
         { .type = NV_DRM_DITHERING_MODE_OFF,
@@ -513,7 +513,7 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
           .name = "on" },
     };
 
-    const struct drm_prop_enum_list broadcast_rgb_enum_list[] = {
+    static const struct drm_prop_enum_list broadcast_rgb_enum_list[] = {
         { .type = NV_DRM_BROADCAST_RGB_AUTO,
           .name = "Automatic" },
         { .type = NV_DRM_BROADCAST_RGB_FULL,
@@ -522,7 +522,7 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
           .name = "Limited 16:235" },
     };
 
-    const struct drm_prop_enum_list underscan_enum_list[] = {
+    static const struct drm_prop_enum_list underscan_enum_list[] = {
         { .type = NV_DRM_UNDERSCAN_OFF,
           .name = "off" },
         { .type = NV_DRM_UNDERSCAN_ON,
@@ -531,7 +531,7 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
           .name = "auto" },
     };
 
-    const struct drm_prop_enum_list hdcp_level_enum_list[] = {
+    static const struct drm_prop_enum_list hdcp_level_enum_list[] = {
         { .type = NVKMS_CONTENT_PROTECTION_OFF,
           .name = "HDCP_OFF" },
         { .type = NVKMS_CONTENT_PROTECTION_HDCP1X_ON,
@@ -544,7 +544,7 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
           .name = "HDCP_FAILED" },
     };
 
-    const struct drm_prop_enum_list color_format_enum_list[] = {
+    static const struct drm_prop_enum_list color_format_enum_list[] = {
         { .type = NV_DRM_CONNECTOR_COLOR_FORMAT_AUTO,
           .name = "auto" },
         { .type = NV_DRM_CONNECTOR_COLOR_FORMAT_RGB,
@@ -555,7 +555,7 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
           .name = "YCbCr444" },
     };
 
-    const struct drm_prop_enum_list output_bpc_enum_list[] = {
+    static const struct drm_prop_enum_list output_bpc_enum_list[] = {
         { .type = NV_DRM_CONNECTOR_OUTPUT_BPC_AUTO,
           .name = "auto" },
         { .type = NV_DRM_CONNECTOR_OUTPUT_BPC_6,
