@@ -196,6 +196,10 @@ NvBool nvDowngradeColorFormatAndBpc(
     const NvBool colorBpcSpecified,
     NVDpyAttributeColor *pDpyColor);
 
+void nvLimitColorBpcEvo(const NVDpyEvoRec *pDpyEvo,
+                        enum NvKmsDpyAttributeColorBpcValue maxBpc,
+                        NVDpyAttributeColor *pDpyColor);
+
 NvBool nvDPValidateModeEvo(NVDpyEvoPtr pDpyEvo,
                            NVHwModeTimingsEvoPtr pTimings,
                            const NvBool colorFormatSpecified,

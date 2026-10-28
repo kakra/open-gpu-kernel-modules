@@ -47,6 +47,16 @@
 #include <drm/drm_edid.h>
 #include <drm/drm_sysfs.h>
 
+#if defined(NV_DRM_CONNECTOR_FUNCS_HAVE_DEBUGFS_INIT) && defined(CONFIG_DEBUG_FS)
+#include <drm/drm_drv.h>
+#include <linux/debugfs.h>
+#include <linux/seq_file.h>
+#endif
+
+/* Range of the "max bpc" property; NVKMS supports up to 12 bpc */
+#define NV_DRM_MAX_BPC_MIN 8
+#define NV_DRM_MAX_BPC_MAX 12
+
 /*
  * Dithering support requires connector atomic_check, which we only enable on
  * kernels with HDR metadata support (v5.14+). This serves as a proxy for
@@ -302,6 +312,11 @@ nv_drm_connector_atomic_create_state(struct drm_connector *connector)
     __drm_atomic_helper_connector_state_reset(&nv_connector_state->base, connector);
 #endif
 
+    /* The state helpers leave it at 0, below the property's range */
+    if (connector->max_bpc_property != NULL) {
+        nv_connector_state->base.max_requested_bpc = NV_DRM_MAX_BPC_MAX;
+    }
+
     return &nv_connector_state->base;
 }
 #else
@@ -323,6 +338,11 @@ static void nv_drm_connector_reset(struct drm_connector *connector)
     }
 
     __drm_atomic_helper_connector_reset(connector, &nv_connector_state->base);
+
+    /* The state helpers leave it at 0, below the property's range */
+    if (connector->max_bpc_property != NULL) {
+        nv_connector_state->base.max_requested_bpc = NV_DRM_MAX_BPC_MAX;
+    }
 }
 #endif
 
@@ -454,6 +474,59 @@ static int nv_drm_connector_atomic_get_property(
     return -EINVAL;
 }
 
+#if defined(NV_DRM_CONNECTOR_FUNCS_HAVE_DEBUGFS_INIT) && defined(CONFIG_DEBUG_FS)
+/*
+ * current_bpc: the bpc NVKMS currently drives the display with, and the bpc
+ * limit NVKMS has stored for it from "max bpc" (0 for none). DRM core's
+ * output_bpc file next to it shows the maximum the display supports.
+ */
+static int nv_drm_connector_current_bpc_show(struct seq_file *m, void *data)
+{
+    struct drm_connector *connector = m->private;
+    struct drm_device *dev = connector->dev;
+    struct nv_drm_device *nv_dev = to_nv_device(dev);
+    struct nv_drm_connector *nv_connector = to_nv_connector(connector);
+    NvU32 bpc = 0;
+    NvU32 max_bpc = 0;
+    int idx;
+    int ret = 0;
+
+    /* The NVKMS device is freed once the DRM device is unplugged */
+    if (!drm_dev_enter(dev, &idx)) {
+        return -ENODEV;
+    }
+
+    drm_modeset_lock(&dev->mode_config.connection_mutex, NULL);
+
+    if ((connector->state->crtc != NULL) &&
+        (nv_connector->nv_detected_encoder != NULL) &&
+        !nvKms->getDisplayColorBpc(nv_dev->pDevice,
+                                   nv_connector->nv_detected_encoder->hDisplay,
+                                   &bpc, &max_bpc)) {
+        ret = -EIO;
+    }
+
+    drm_modeset_unlock(&dev->mode_config.connection_mutex);
+
+    drm_dev_exit(idx);
+
+    if (ret == 0) {
+        seq_printf(m, "Current: %u\n", bpc);
+        seq_printf(m, "Maximum: %u\n", max_bpc);
+    }
+
+    return ret;
+}
+DEFINE_SHOW_ATTRIBUTE(nv_drm_connector_current_bpc);
+
+static void nv_drm_connector_debugfs_init(struct drm_connector *connector,
+                                          struct dentry *root)
+{
+    debugfs_create_file("current_bpc", 0444, root, connector,
+                        &nv_drm_connector_current_bpc_fops);
+}
+#endif
+
 static struct drm_connector_funcs nv_connector_funcs = {
     .destroy                = nv_drm_connector_destroy,
 #if defined(NV_DRM_CONNECTOR_FUNCS_HAS_ATOMIC_CREATE_STATE)
@@ -468,6 +541,9 @@ static struct drm_connector_funcs nv_connector_funcs = {
     .atomic_destroy_state   = nv_drm_connector_atomic_destroy_state,
     .atomic_set_property    = nv_drm_connector_atomic_set_property,
     .atomic_get_property    = nv_drm_connector_atomic_get_property,
+#if defined(NV_DRM_CONNECTOR_FUNCS_HAVE_DEBUGFS_INIT) && defined(CONFIG_DEBUG_FS)
+    .debugfs_init           = nv_drm_connector_debugfs_init,
+#endif
 };
 
 static int nv_drm_connector_get_modes(struct drm_connector *connector)
@@ -645,6 +721,30 @@ __nv_drm_connector_atomic_check(struct drm_connector *connector,
              NV_DRM_BROADCAST_RGB_LIMITED);
         req_config->flags.colorRangeChanged = NV_TRUE;
         crtc_state->mode_changed = true;
+    }
+
+    /*
+     * Handle "max bpc". Like the color range it is only applied by a
+     * modeset; DRM core already flags the CRTC when it changes. Pass it along
+     * with every modeset, so it also reaches a display that is newly driven
+     * by this CRTC or was recreated by a hotplug.
+     */
+    if (connector->max_bpc_property != NULL) {
+        const NvBool maxBpcChanged =
+            old_connector_state->max_requested_bpc !=
+            new_connector_state->max_requested_bpc;
+
+        if (maxBpcChanged || drm_atomic_crtc_needs_modeset(crtc_state)) {
+            const unsigned int max_bpc = new_connector_state->max_requested_bpc;
+
+            /* NVKMS drives 8, 10 or 12 bpc; round down to one of them */
+            req_config->modeSetConfig.maxBpc =
+                (max_bpc >= 12) ? 12 : (max_bpc >= 10) ? 10 : 8;
+            req_config->flags.maxBpcChanged = NV_TRUE;
+        }
+        if (maxBpcChanged) {
+            crtc_state->mode_changed = true;
+        }
     }
 
     /* Handle HDMI VSIF metadata changes */
@@ -889,6 +989,15 @@ nv_drm_connector_new(struct drm_device *dev,
         drm_object_attach_property(&nv_connector->base.base,
                                    nv_dev->nv_connector_broadcast_rgb_property,
                                    NV_DRM_BROADCAST_RGB_AUTO);
+
+        if (drm_connector_attach_max_bpc_property(&nv_connector->base,
+                                                  NV_DRM_MAX_BPC_MIN,
+                                                  NV_DRM_MAX_BPC_MAX) != 0) {
+            NV_DRM_DEV_LOG_ERR(
+                nv_dev,
+                "Failed to attach the max bpc property to connector created from physical index %u",
+                nv_connector->physicalIndex);
+        }
     }
 #endif
 
