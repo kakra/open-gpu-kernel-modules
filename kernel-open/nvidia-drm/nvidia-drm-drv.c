@@ -509,6 +509,15 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
           .name = "on" },
     };
 
+    const struct drm_prop_enum_list broadcast_rgb_enum_list[] = {
+        { .type = NV_DRM_BROADCAST_RGB_AUTO,
+          .name = "Automatic" },
+        { .type = NV_DRM_BROADCAST_RGB_FULL,
+          .name = "Full" },
+        { .type = NV_DRM_BROADCAST_RGB_LIMITED,
+          .name = "Limited 16:235" },
+    };
+
     const struct drm_prop_enum_list hdcp_level_enum_list[] = {
         { .type = NVKMS_CONTENT_PROTECTION_OFF,
           .name = "HDCP_OFF" },
@@ -669,6 +678,16 @@ static int nv_drm_create_properties(struct nv_drm_device *nv_dev)
                                  ARRAY_SIZE(dithering_mode_enum_list));
     if (nv_dev->nv_connector_dithering_mode_property == NULL) {
         NV_DRM_LOG_ERR("Failed to create dithering mode property");
+        return -ENOMEM;
+    }
+
+    nv_dev->nv_connector_broadcast_rgb_property =
+        drm_property_create_enum(nv_dev->dev, 0,
+                                 "Broadcast RGB",
+                                 broadcast_rgb_enum_list,
+                                 ARRAY_SIZE(broadcast_rgb_enum_list));
+    if (nv_dev->nv_connector_broadcast_rgb_property == NULL) {
+        NV_DRM_LOG_ERR("Failed to create Broadcast RGB property");
         return -ENOMEM;
     }
 

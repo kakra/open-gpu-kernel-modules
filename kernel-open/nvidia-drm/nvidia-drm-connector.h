@@ -80,6 +80,7 @@ static inline struct nv_drm_connector *to_nv_connector(
 struct nv_drm_connector_state {
        struct drm_connector_state base;
        enum nv_drm_dithering_mode dithering_mode;
+       enum nv_drm_broadcast_rgb broadcast_rgb;
        struct drm_property_blob *hdcp_topology_blob;
        struct drm_property_blob *hdmi_vsif_metadata;
 };
