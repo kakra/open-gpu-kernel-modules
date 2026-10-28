@@ -3243,6 +3243,19 @@ nv_drm_plane_create(struct drm_device *dev,
             plane,
             validLayerRRTransforms);
 
+#if defined(NV_DRM_PLANE_CREATE_ZPOS_IMMUTABLE_PROPERTY_PRESENT)
+    /*
+     * NVKMS stacks the layers of a head in a fixed order: the main layer at
+     * the bottom, each higher layer index above the lower ones (the default
+     * composition depth NVKMS_MAX_LAYERS_PER_HEAD - layer, which nvidia-drm
+     * never overrides), and the cursor above all layers.
+     */
+    drm_plane_create_zpos_immutable_property(
+        plane,
+        (plane_type == DRM_PLANE_TYPE_CURSOR) ?
+            pResInfo->numLayers[head] : layer_idx);
+#endif
+
 #if defined(NV_DRM_PLANE_ADD_SIZE_HINTS_PROPERTY_PRESENT)
     if (plane_type == DRM_PLANE_TYPE_CURSOR) {
         __nv_drm_cursor_plane_create_size_hints_property(nv_dev, plane, pResInfo);

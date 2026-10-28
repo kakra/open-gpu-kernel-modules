@@ -1695,6 +1695,23 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_DRM_PLANE_CREATE_COLOR_PROPERTIES_PRESENT" "" "functions"
         ;;
 
+        drm_plane_create_zpos_immutable_property)
+            #
+            # Determine if the function drm_plane_create_zpos_immutable_property()
+            # is present.
+            #
+            # Added by commit 44d1240d006c ("drm: add generic zpos property")
+            # in v4.9.
+            #
+            CODE="
+            #include <drm/drm_blend.h>
+            void conftest_drm_plane_create_zpos_immutable_property(void) {
+                drm_plane_create_zpos_immutable_property();
+            }"
+
+            compile_check_conftest "$CODE" "NV_DRM_PLANE_CREATE_ZPOS_IMMUTABLE_PROPERTY_PRESENT" "" "functions"
+        ;;
+
         drm_format_info_has_is_yuv)
             #
             # Determine if struct drm_format_info has .is_yuv member.
