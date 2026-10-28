@@ -1493,6 +1493,20 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_DRM_HDCP_UPDATE_CONTENT_PROTECTION_PRESENT" "" "functions"
         ;;
 
+        drm_plane_add_size_hints_property)
+            #
+            # Determine if drm_plane_add_size_hints_property() is present.
+            #
+            # Added with the plane SIZE_HINTS property.
+            #
+            CODE="
+            #include <drm/drm_plane.h>
+            void conftest_drm_plane_add_size_hints_property(void) {
+                drm_plane_add_size_hints_property();
+            }"
+            compile_check_conftest "$CODE" "NV_DRM_PLANE_ADD_SIZE_HINTS_PROPERTY_PRESENT" "" "functions"
+        ;;
+
         pde_data)
             #
             # Determine if the pde_data() function is present.
