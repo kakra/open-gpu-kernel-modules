@@ -32,9 +32,15 @@
 #endif
 
 #include <drm/drm_connector.h>
+#include <drm/drm_modes.h>
+
+#include <linux/spinlock.h>
 
 #include "nvtypes.h"
 #include "nvkms-api-types.h"
+
+/* Native-resolution modes kept per connector for "scaling mode" */
+#define NV_DRM_CONNECTOR_MAX_NATIVE_MODES 8
 
 struct nv_drm_connector {
     NvU32 physicalIndex;
@@ -64,6 +70,18 @@ struct nv_drm_connector {
      * The crtc using this connector with DRM_IOCTL_NVIDIA_GRANT_PERMISSIONS.
      */
     struct nv_drm_crtc *modeset_permission_crtc;
+
+    /*
+     * The modes at the display's native resolution (the size of its
+     * preferred mode), saved by get_modes. A mode of another size is scaled
+     * to the one of these with the closest refresh rate when "scaling mode"
+     * asks for it. Protected by native_modes_lock, since atomic checks
+     * don't hold mode_config.mutex.
+     */
+    spinlock_t native_modes_lock;
+    struct drm_display_mode native_modes[NV_DRM_CONNECTOR_MAX_NATIVE_MODES];
+    unsigned int num_native_modes;
+    bool native_mode_preferred;
 
     struct drm_connector base;
 };
@@ -123,6 +141,10 @@ bool nv_drm_connector_revoke_permissions(struct drm_device *dev,
 void nv_drm_connector_update_content_protection(struct nv_drm_connector *nv_connector);
 int nv_drm_connector_update_topology_property(struct nv_drm_connector *nv_connector,
                                               const void *topology);
+
+bool nv_drm_connector_get_native_mode(struct nv_drm_connector *nv_connector,
+                                      int vrefresh,
+                                      struct drm_display_mode *native_mode);
 
 
 #endif /* NV_DRM_AVAILABLE */
