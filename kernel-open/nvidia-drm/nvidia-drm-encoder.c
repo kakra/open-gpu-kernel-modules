@@ -60,12 +60,20 @@ static const struct drm_encoder_funcs nv_encoder_funcs = {
 };
 
 /*
- * Implement "scaling mode": show a mode smaller than the display's native
- * resolution by driving the native timings with the closest refresh rate and
- * scaling the mode's area with the head scaler. Displays such as laptop
- * panels often accept no other timings. The CRTC's mode keeps the requested
- * size, which is what the layers are positioned in; the adjusted mode gets
- * the timings that are driven.
+ * Implement "scaling mode" and underscan with the head scaler.
+ *
+ * "scaling mode": show a mode smaller than the display's native resolution
+ * by driving the native timings with the closest refresh rate and scaling
+ * the mode's area. Displays such as laptop panels often accept no other
+ * timings.
+ *
+ * Underscan, for TVs that crop the picture edges: shrink the image by
+ * "underscan hborder" pixels on the left and on the right and "underscan
+ * vborder" pixels at the top and at the bottom, keeping its aspect ratio,
+ * like nouveau and radeon.
+ *
+ * The CRTC's mode keeps the requested size, which is what the layers are
+ * positioned in; the adjusted mode gets the timings that are driven.
  */
 static int nv_drm_encoder_atomic_check(struct drm_encoder *encoder,
                                        struct drm_crtc_state *crtc_state,
@@ -73,11 +81,21 @@ static int nv_drm_encoder_atomic_check(struct drm_encoder *encoder,
 {
     struct nv_drm_connector *nv_connector =
         to_nv_connector(conn_state->connector);
+    const struct nv_drm_connector_state *nv_conn_state =
+        to_nv_drm_connector_state(conn_state);
     struct nv_drm_crtc_state *nv_crtc_state = to_nv_crtc_state(crtc_state);
     struct NvKmsKapiHeadModeSetConfig *config =
         &nv_crtc_state->req_config.modeSetConfig;
     const struct drm_display_mode *mode = &crtc_state->mode;
+    const bool underscan =
+        (nv_conn_state->underscan != NV_DRM_UNDERSCAN_OFF) &&
+        ((nv_conn_state->underscan_hborder != 0) ||
+         (nv_conn_state->underscan_vborder != 0));
+    unsigned int scaling_mode = conn_state->scaling_mode;
     struct drm_display_mode native = { };
+    bool scale = false;
+    u32 raster_width, raster_height;
+    u32 area_width, area_height;
     struct NvKmsRect out;
 
     /* DRM core only resets the adjusted mode in these cases */
@@ -88,61 +106,81 @@ static int nv_drm_encoder_atomic_check(struct drm_encoder *encoder,
     config->viewPort.enabled = NV_FALSE;
 
     if (!crtc_state->enable ||
-        (conn_state->scaling_mode == DRM_MODE_SCALE_NONE) ||
         (hweight32(crtc_state->connector_mask) != 1) ||
-        (mode->flags & (DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_DBLSCAN))) {
-        return 0;
-    }
-
-    if (!nv_drm_connector_get_native_mode(nv_connector,
-                                          drm_mode_vrefresh(mode),
-                                          &native)) {
-        return 0;
-    }
-
-    /*
-     * Drive the native size as requested, and leave larger modes to mode
-     * validation; the head scaler only upscales here.
-     */
-    if (((mode->hdisplay == native.hdisplay) &&
-         (mode->vdisplay == native.vdisplay)) ||
-        (mode->hdisplay > native.hdisplay) ||
-        (mode->vdisplay > native.vdisplay) ||
+        (mode->flags & (DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_DBLSCAN)) ||
         (mode->hdisplay == 0) || (mode->vdisplay == 0)) {
         return 0;
     }
 
-    switch (conn_state->scaling_mode) {
+    /*
+     * Scale modes smaller than the native size. Drive the native size as
+     * requested, and leave larger modes to mode validation.
+     */
+    if ((scaling_mode != DRM_MODE_SCALE_NONE) &&
+        nv_drm_connector_get_native_mode(nv_connector,
+                                         drm_mode_vrefresh(mode),
+                                         &native) &&
+        (mode->hdisplay <= native.hdisplay) &&
+        (mode->vdisplay <= native.vdisplay) &&
+        ((mode->hdisplay != native.hdisplay) ||
+         (mode->vdisplay != native.vdisplay))) {
+        scale = true;
+    }
+
+    if (!scale && !underscan) {
+        return 0;
+    }
+
+    raster_width = scale ? native.hdisplay : mode->hdisplay;
+    raster_height = scale ? native.vdisplay : mode->vdisplay;
+    area_width = raster_width;
+    area_height = raster_height;
+
+    if (underscan) {
+        if ((2 * nv_conn_state->underscan_hborder >= raster_width) ||
+            (2 * nv_conn_state->underscan_vborder >= raster_height)) {
+            return -EINVAL;
+        }
+        area_width -= 2 * nv_conn_state->underscan_hborder;
+        area_height -= 2 * nv_conn_state->underscan_vborder;
+    }
+
+    /* Underscan alone keeps the image's aspect ratio */
+    if (!scale) {
+        scaling_mode = DRM_MODE_SCALE_ASPECT;
+    }
+
+    switch (scaling_mode) {
     case DRM_MODE_SCALE_CENTER:
-        out.width = mode->hdisplay;
-        out.height = mode->vdisplay;
+        out.width = min_t(u32, mode->hdisplay, area_width);
+        out.height = min_t(u32, mode->vdisplay, area_height);
         break;
     case DRM_MODE_SCALE_ASPECT:
-        if ((u32)mode->hdisplay * native.vdisplay >
-            (u32)mode->vdisplay * native.hdisplay) {
-            /* Wider than the display: fill the width */
-            out.width = native.hdisplay;
-            out.height = DIV_ROUND_CLOSEST((u32)mode->vdisplay *
-                                           native.hdisplay,
+        if ((u32)mode->hdisplay * area_height >
+            (u32)mode->vdisplay * area_width) {
+            /* Wider than the area: fill the width */
+            out.width = area_width;
+            out.height = DIV_ROUND_CLOSEST((u32)mode->vdisplay * area_width,
                                            mode->hdisplay);
         } else {
-            out.width = DIV_ROUND_CLOSEST((u32)mode->hdisplay *
-                                          native.vdisplay,
+            out.width = DIV_ROUND_CLOSEST((u32)mode->hdisplay * area_height,
                                           mode->vdisplay);
-            out.height = native.vdisplay;
+            out.height = area_height;
         }
         break;
     case DRM_MODE_SCALE_FULLSCREEN:
     default:
-        out.width = native.hdisplay;
-        out.height = native.vdisplay;
+        out.width = area_width;
+        out.height = area_height;
         break;
     }
 
-    out.x = (native.hdisplay - out.width) / 2;
-    out.y = (native.vdisplay - out.height) / 2;
+    out.x = (raster_width - out.width) / 2;
+    out.y = (raster_height - out.height) / 2;
 
-    drm_mode_copy(&crtc_state->adjusted_mode, &native);
+    if (scale) {
+        drm_mode_copy(&crtc_state->adjusted_mode, &native);
+    }
 
     config->viewPort.enabled = NV_TRUE;
     config->viewPort.sizeIn.width = mode->hdisplay;
