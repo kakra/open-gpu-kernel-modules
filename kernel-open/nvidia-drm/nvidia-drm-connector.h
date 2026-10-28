@@ -118,6 +118,9 @@ struct nv_drm_connector_state {
        enum nv_drm_connector_color_format color_format;
        enum nv_drm_connector_output_bpc output_bpc;
        enum nv_drm_broadcast_rgb broadcast_rgb;
+       enum nv_drm_underscan underscan;
+       u32 underscan_hborder;
+       u32 underscan_vborder;
        struct drm_property_blob *hdmi_vsif_metadata;
        enum nv_drm_allm_mode allmMode;
 };

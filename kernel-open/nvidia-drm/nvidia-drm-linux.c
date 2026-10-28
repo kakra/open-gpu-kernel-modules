@@ -63,8 +63,8 @@ module_param_named(deadline_boost, nv_drm_deadline_boost_module_param, bool, 064
 
 MODULE_PARM_DESC(
     scaling_mode,
-    "Add the \"scaling mode\" connector property, to show modes below the "
-    "native resolution with the display scaler (1 = enable (default), 0 = disable)");
+    "Add the \"scaling mode\" and underscan connector properties, which use "
+    "the display scaler (1 = enable (default), 0 = disable)");
 module_param_named(scaling_mode, nv_drm_scaling_mode_module_param, bool, 0444);
 
 #endif /* NV_DRM_AVAILABLE */

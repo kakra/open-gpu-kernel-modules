@@ -144,6 +144,17 @@ enum nv_drm_broadcast_rgb {
     NV_DRM_BROADCAST_RGB_MAX
 };
 
+/* Values match the "underscan" property of amdgpu and radeon */
+enum nv_drm_underscan {
+    NV_DRM_UNDERSCAN_OFF = 0,
+    NV_DRM_UNDERSCAN_ON,
+    NV_DRM_UNDERSCAN_AUTO,
+    NV_DRM_UNDERSCAN_MAX
+};
+
+/* Range of the "underscan hborder" and "underscan vborder" properties (per side) */
+#define NV_DRM_UNDERSCAN_BORDER_MAX 128
+
 struct nv_drm_fence_context;
 
 #if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
@@ -299,6 +310,9 @@ struct nv_drm_device {
 
     struct drm_property *nv_connector_dithering_mode_property;
     struct drm_property *nv_connector_broadcast_rgb_property;
+    struct drm_property *nv_connector_underscan_property;
+    struct drm_property *nv_connector_underscan_hborder_property;
+    struct drm_property *nv_connector_underscan_vborder_property;
 
     struct drm_property *nv_connector_color_format_property;
     struct drm_property *nv_connector_output_bpc_property;
