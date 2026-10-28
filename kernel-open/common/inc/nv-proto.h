@@ -40,6 +40,10 @@ void        nv_procfs_add_warning       (const char *, const char *);
 int         nv_procfs_add_gpu           (nv_linux_state_t *);
 void        nv_procfs_remove_gpu        (nv_linux_state_t *);
 
+void        nv_hwmon_init               (nv_linux_state_t *);
+void        nv_hwmon_start              (nv_linux_state_t *);
+void        nv_hwmon_stop               (nv_linux_state_t *, nvidia_stack_t *);
+
 extern nv_pm_action_depth_t nv_procfs_pm_action_depth;
 
 int         nvidia_mmap                 (struct file *, struct vm_area_struct *);

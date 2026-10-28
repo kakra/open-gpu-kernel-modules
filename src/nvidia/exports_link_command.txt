@@ -210,6 +210,8 @@
 --undefined=rm_transition_dynamic_power
 --undefined=rm_acpi_notify
 --undefined=rm_get_power_info
+--undefined=rm_hwmon_set_polling
+--undefined=rm_hwmon_read
 --undefined=rm_disable_iomap_wc
 --undefined=rm_is_altstack_in_use
 --undefined=rm_acpi_nvpcf_notify

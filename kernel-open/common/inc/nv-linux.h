@@ -1260,6 +1260,23 @@ struct nv_cxl {
 };
 #endif
 
+/* hwmon sensors read from the RUSD page, see nv-hwmon.c */
+typedef struct nv_hwmon_s
+{
+    struct device *dev;             /* hwmon device, NULL if not registered */
+    struct delayed_work work;       /* registration and idle polling stop */
+    struct mutex lock;              /* protects everything below */
+    NvBool stopping;
+    NvBool polling;                 /* GSP polls the RUSD sensors for us */
+    unsigned int probe_tries;
+    NvU32 visible;                  /* mask of nv_hwmon_sensor_t */
+    unsigned long last_read;        /* jiffies */
+    NvU64 heartbeat;                /* sum of the RUSD timestamps last seen */
+    unsigned long heartbeat_jiffies;
+    NvBool stale;                   /* GSP stopped updating, don't ask again before retry_jiffies */
+    unsigned long retry_jiffies;
+} nv_hwmon_t;
+
 typedef struct nv_linux_state_s {
     nv_state_t nv_state;
 
@@ -1466,6 +1483,7 @@ typedef struct nv_linux_state_s {
 
     /* The GPU was intact when the last non-fatal PCIe error was reported */
     NvBool pcie_nonfatal_intact;
+    nv_hwmon_t hwmon;
 } nv_linux_state_t;
 
 extern nv_linux_state_t *nv_linux_devices;

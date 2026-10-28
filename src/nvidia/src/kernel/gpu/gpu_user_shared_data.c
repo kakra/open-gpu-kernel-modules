@@ -448,6 +448,7 @@ gpuCreateRusdMemory_IMPL
     }
 
     portMemSet(pGpu->userSharedData.pMapBuffer, 0, sizeof(NV00DE_SHARED_DATA));
+    pGpu->userSharedData.kernelPolledDataMask = 0;
 
     gpuRusdInitPhysical_HAL(pGpu);
 
@@ -688,6 +689,7 @@ _handlePollMaskHelper
     _gpushareddataGetPollDataUnion(pGpu, &polledDataMask, &pollingIntervalMs);
 
     polledDataMask |= permanentPolledDataMask;
+    polledDataMask |= pGpu->userSharedData.kernelPolledDataMask;
 
     //
     // If this is not a polling interval request, the calculated polling
@@ -743,6 +745,44 @@ gpuRusdRequestPermanentDataPoll_IMPL
         NV_PRINTF(LEVEL_ERROR, "Fail to queue work _gpuRusdRequestPermanentDataPollCallback\n");
 
     return status;
+}
+
+NV_STATUS
+gpushareddataSetKernelPolledDataMask
+(
+    OBJGPU *pGpu,
+    NvU64 polledDataMask,
+    NvBool bForce
+)
+{
+    NvU64 originalPolledDataMask = pGpu->userSharedData.kernelPolledDataMask;
+    NV_STATUS status;
+
+    if (!_rusdPollingSupported(pGpu) || (pGpu->userSharedData.pMemDesc == NULL))
+        return NV_ERR_NOT_SUPPORTED;
+
+    // Polling is always forced on, no point routing to GSP because we will never change state
+    if (pGpu->userSharedData.pollingRegistryOverride == NV_REG_STR_RM_DEBUG_RUSD_POLLING_FORCE_ENABLE)
+        return NV_OK;
+
+    if ((polledDataMask == originalPolledDataMask) && !bForce)
+        return NV_OK;
+
+    pGpu->userSharedData.kernelPolledDataMask = polledDataMask;
+
+    //
+    // GSP may have stopped polling (for example across a power transition)
+    // while lastPolledDataMask still says it is on. Clear it so the helper
+    // sends the combined mask again.
+    //
+    if (bForce)
+        pGpu->userSharedData.lastPolledDataMask = 0;
+
+    NV_CHECK_OK_OR_ELSE(status, LEVEL_ERROR,
+        _handlePollMaskHelper(pGpu, NV_FALSE, NV_FALSE),
+        pGpu->userSharedData.kernelPolledDataMask = originalPolledDataMask; return status);
+
+    return NV_OK;
 }
 
 NV_STATUS

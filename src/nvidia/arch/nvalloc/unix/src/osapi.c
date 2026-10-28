@@ -4356,6 +4356,174 @@ void NV_API_CALL rm_request_dnotifier_state(
     }
 }
 
+#define RM_HWMON_POLLED_DATA_MASK (NV00DE_RUSD_POLL_CLOCK |   \
+                                   NV00DE_RUSD_POLL_POWER |   \
+                                   NV00DE_RUSD_POLL_THERMAL | \
+                                   NV00DE_RUSD_POLL_FAN)
+
+//
+// Start or stop GSP polling of the RUSD data read by rm_hwmon_read().
+// Fails without touching the GPU if it is not at full power.
+//
+NV_STATUS NV_API_CALL rm_hwmon_set_polling(
+    nvidia_stack_t *sp,
+    nv_state_t     *pNv,
+    NvBool          bEnable,
+    NvBool          bForce
+)
+{
+    THREAD_STATE_NODE threadState;
+    void              *fp;
+    GPU_MASK          gpuMask;
+    NV_STATUS         status;
+
+    NV_ENTER_RM_RUNTIME(sp,fp);
+    threadStateInit(&threadState, THREAD_STATE_FLAGS_NONE);
+
+    // LOCK: acquire API lock
+    status = rmapiLockAcquire(API_LOCK_FLAGS_NONE, RM_LOCK_MODULES_OSAPI);
+    if (status == NV_OK)
+    {
+        OBJGPU *pGpu = NV_GET_NV_PRIV_PGPU(pNv);
+
+        // LOCK: acquire per device lock
+        if (pGpu == NULL)
+        {
+            status = NV_ERR_INVALID_STATE;
+        }
+        else if ((status = rmGpuGroupLockAcquire(pGpu->gpuInstance, GPU_LOCK_GRP_SUBDEVICE,
+                                                 GPUS_LOCK_FLAGS_NONE, RM_LOCK_MODULES_OSAPI,
+                                                 &gpuMask)) == NV_OK)
+        {
+            if (!FULL_GPU_SANITY_CHECK(pGpu) ||
+                !pGpu->getProperty(pGpu, PDB_PROP_GPU_STATE_INITIALIZED))
+            {
+                status = NV_ERR_GPU_NOT_FULL_POWER;
+            }
+            else
+            {
+                status = gpushareddataSetKernelPolledDataMask(pGpu,
+                             bEnable ? RM_HWMON_POLLED_DATA_MASK : 0, bForce);
+            }
+
+            // UNLOCK: release per device lock
+            rmGpuGroupLockRelease(gpuMask, GPUS_LOCK_FLAGS_NONE);
+        }
+
+        // UNLOCK: release API lock
+        rmapiLockRelease();
+    }
+
+    threadStateFree(&threadState, THREAD_STATE_FLAGS_NONE);
+    NV_EXIT_RM_RUNTIME(sp,fp);
+
+    return status;
+}
+
+//
+// Copy the hwmon sensors out of the RUSD page. Lockless: the page is CPU
+// memory that GSP writes with a per-field seqlock, so this never touches the
+// GPU. The caller keeps the adapter initialized for the duration.
+//
+void NV_API_CALL rm_hwmon_read(
+    nvidia_stack_t     *sp,
+    nv_state_t         *pNv,
+    nv_hwmon_reading_t *pReadings
+)
+{
+    void                *fp;
+    OBJGPU              *pGpu;
+    NV00DE_SHARED_DATA  *pSharedData;
+    RUSD_TEMPERATURE     temperature;
+    RUSD_INST_POWER_USAGE instPower;
+    RUSD_AVG_POWER_USAGE avgPower;
+    RUSD_POWER_LIMITS    powerLimit;
+    RUSD_CLK_PUBLIC_DOMAIN_INFOS clocks;
+    RUSD_FAN_COOLER_STATUS fans;
+    NvU32                i;
+
+    NV_ENTER_RM_RUNTIME(sp,fp);
+
+    portMemSet(pReadings, 0, sizeof(*pReadings) * NV_HWMON_SENSOR_COUNT);
+
+    pGpu = NV_GET_NV_PRIV_PGPU(pNv);
+    if ((pGpu == NULL) || (pGpu->userSharedData.pMapBuffer == NULL))
+        goto done;
+
+    pSharedData = (NV00DE_SHARED_DATA *)pGpu->userSharedData.pMapBuffer;
+
+#define RM_HWMON_SET(sensor, ts, val)                   \
+    do {                                                \
+        pReadings[(sensor)].timestamp = (ts);           \
+        pReadings[(sensor)].value = (val);              \
+    } while (0)
+
+    if (RUSD_READ_DATA(pSharedData, temperatures[RUSD_TEMPERATURE_TYPE_GPU], &temperature) &&
+        (temperature.temperature != 0))
+    {
+        RM_HWMON_SET(NV_HWMON_SENSOR_TEMP_GPU, temperature.lastModifiedTimestamp,
+                     ((NvS64)temperature.temperature * 1000) / 256);
+    }
+
+    if (RUSD_READ_DATA(pSharedData, temperatures[RUSD_TEMPERATURE_TYPE_MEMORY], &temperature) &&
+        (temperature.temperature != 0))
+    {
+        RM_HWMON_SET(NV_HWMON_SENSOR_TEMP_MEMORY, temperature.lastModifiedTimestamp,
+                     ((NvS64)temperature.temperature * 1000) / 256);
+    }
+
+    // A powered GPU never draws 0 mW, so 0 means the value is not supported
+    if (RUSD_READ_DATA(pSharedData, instPowerUsage, &instPower) &&
+        (instPower.info.instGpuPower != 0))
+    {
+        RM_HWMON_SET(NV_HWMON_SENSOR_POWER_INSTANT, instPower.lastModifiedTimestamp,
+                     (NvS64)instPower.info.instGpuPower * 1000);
+    }
+
+    if (RUSD_READ_DATA(pSharedData, avgPowerUsage, &avgPower) &&
+        (avgPower.info.averageGpuPower != 0))
+    {
+        RM_HWMON_SET(NV_HWMON_SENSOR_POWER_AVERAGE, avgPower.lastModifiedTimestamp,
+                     (NvS64)avgPower.info.averageGpuPower * 1000);
+    }
+
+    if (RUSD_READ_DATA(pSharedData, powerLimitGpu, &powerLimit) &&
+        (powerLimit.info.enforcedmW != 0))
+    {
+        RM_HWMON_SET(NV_HWMON_SENSOR_POWER_CAP, powerLimit.lastModifiedTimestamp,
+                     (NvS64)powerLimit.info.enforcedmW * 1000);
+    }
+
+    if (RUSD_READ_DATA(pSharedData, clkPublicDomainInfos, &clocks))
+    {
+        if (clocks.info[RUSD_CLK_PUBLIC_DOMAIN_GRAPHICS].actualClkKHz != 0)
+        {
+            RM_HWMON_SET(NV_HWMON_SENSOR_CLOCK_GRAPHICS, clocks.lastModifiedTimestamp,
+                         (NvS64)clocks.info[RUSD_CLK_PUBLIC_DOMAIN_GRAPHICS].actualClkKHz * 1000);
+        }
+        if (clocks.info[RUSD_CLK_PUBLIC_DOMAIN_MEMORY].actualClkKHz != 0)
+        {
+            RM_HWMON_SET(NV_HWMON_SENSOR_CLOCK_MEMORY, clocks.lastModifiedTimestamp,
+                         (NvS64)clocks.info[RUSD_CLK_PUBLIC_DOMAIN_MEMORY].actualClkKHz * 1000);
+        }
+    }
+
+    // A stopped fan reads 0 RPM, so fans are reported whenever the data is valid
+    if (RUSD_READ_DATA(pSharedData, fanCoolerStatus, &fans))
+    {
+        for (i = 0; i <= (NV_HWMON_SENSOR_FAN1 - NV_HWMON_SENSOR_FAN0); i++)
+        {
+            RM_HWMON_SET(NV_HWMON_SENSOR_FAN0 + i, fans.lastModifiedTimestamp,
+                         fans.info.rpmCurr[i]);
+        }
+    }
+
+#undef RM_HWMON_SET
+
+done:
+    NV_EXIT_RM_RUNTIME(sp,fp);
+}
+
 NV_STATUS NV_API_CALL rm_p2p_dma_map_pages(
     nvidia_stack_t  *sp,
     nv_dma_device_t *peer,

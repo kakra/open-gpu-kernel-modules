@@ -1813,6 +1813,8 @@ int nv_start_device(nv_state_t *nv, nvidia_stack_t *sp)
 
     rm_request_dnotifier_state(sp, nv);
 
+    nv_hwmon_start(nvl);
+
     /*
      * Now that RM init is done, allow dynamic power to control the GPU in FINE
      * mode, if enabled.  (If the mode is COARSE, this unref will do nothing
@@ -2276,6 +2278,8 @@ void nv_shutdown_adapter(nvidia_stack_t *sp,
                          nv_state_t *nv,
                          nv_linux_state_t *nvl)
 {
+    nv_hwmon_stop(nvl, sp);
+
     rm_disable_adapter(sp, nv);
 
     // It's safe to call nv_kthread_q_stop even if queue is not initialized
@@ -2369,6 +2373,8 @@ void nv_stop_device(nv_state_t *nv, nvidia_stack_t *sp)
      * This balances the FINE unref at the end of nv_start_device().
      */
     rm_ref_dynamic_power(sp, nv, NV_DYNAMIC_PM_FINE);
+
+    nv_hwmon_stop(nvl, sp);
 
     /* Adapter is already shutdown as part of nvidia_pci_remove */
     if (!nv->removed)
@@ -4380,6 +4386,8 @@ NvBool nv_lock_init_locks
     NV_INIT_MUTEX(&nvl->open_q_lock);
 
     atomic64_set(&nvl->usage_count, 0);
+
+    nv_hwmon_init(nvl);
 
     if (!rm_init_event_locks(sp, nv))
         return NV_FALSE;

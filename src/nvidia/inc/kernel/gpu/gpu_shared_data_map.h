@@ -47,6 +47,8 @@ typedef struct GpuSharedDataMap {
     MEMORY_DESCRIPTOR *pMemDesc;
     NvP64 pMapBuffer;
     NvU64 lastPolledDataMask;
+    // Polled data requested by the kernel interface (hwmon), not by an 00DE object
+    NvU64 kernelPolledDataMask;
     NvU32 processId;
     NvU32 pollingRegistryOverride;
     NvU32 defaultPollingIntervalMs;
@@ -89,6 +91,15 @@ void gpushareddataWriteFinish_INTERNAL(OBJGPU *pGpu, NvU64 offset);
 
 #define gpushareddataWriteFinish(pGpu, field) \
     gpushareddataWriteFinish_INTERNAL(pGpu, NV_OFFSETOF(NV00DE_SHARED_DATA, field))
+
+/**
+ * Set the polled data mask requested by the kernel itself (hwmon). It is
+ * combined with the masks of all 00DE objects. bForce resends the combined
+ * mask to GSP even if it did not change.
+ *
+ * Requires the API lock and the GPU lock.
+ */
+NV_STATUS gpushareddataSetKernelPolledDataMask(OBJGPU *pGpu, NvU64 polledDataMask, NvBool bForce);
 
 /*!
  * @brief RUSD settings data

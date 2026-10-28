@@ -136,6 +136,7 @@ NV_OBJECTS_DEPEND_ON_CONFTEST += $(NVIDIA_OBJECTS)
 
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += set_pages_uc
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += set_memory_uc
+NV_CONFTEST_FUNCTION_COMPILE_TESTS += hwmon_device_register_with_info
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += set_memory_array_uc
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += set_pages_array_uc
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += ioremap_cache
@@ -263,6 +264,7 @@ NV_CONFTEST_TYPE_COMPILE_TESTS += of_property_for_each_u32_has_internal_args
 NV_CONFTEST_TYPE_COMPILE_TESTS += platform_driver_struct_remove_returns_void
 NV_CONFTEST_TYPE_COMPILE_TESTS += class_create_has_no_owner_arg
 NV_CONFTEST_TYPE_COMPILE_TESTS += class_devnode_has_const_arg
+NV_CONFTEST_TYPE_COMPILE_TESTS += hwmon_ops_read_string_has_const_str
 NV_CONFTEST_TYPE_COMPILE_TESTS += pm_qos_read_value_supported
 NV_CONFTEST_TYPE_COMPILE_TESTS += devfreq_dev_profile_has_is_cooling_device
 NV_CONFTEST_TYPE_COMPILE_TESTS += devfreq_has_freq_table

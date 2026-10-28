@@ -777,6 +777,30 @@ typedef struct
     const char *db_support;
 } nv_power_info_t;
 
+/*
+ * Sensors read from the RM user shared data (RUSD) page for hwmon.
+ * A reading with timestamp 0 has no valid data.
+ */
+typedef enum
+{
+    NV_HWMON_SENSOR_TEMP_GPU = 0,       /* millidegrees Celsius */
+    NV_HWMON_SENSOR_TEMP_MEMORY,        /* millidegrees Celsius */
+    NV_HWMON_SENSOR_POWER_INSTANT,      /* microwatts */
+    NV_HWMON_SENSOR_POWER_AVERAGE,      /* microwatts */
+    NV_HWMON_SENSOR_POWER_CAP,          /* microwatts */
+    NV_HWMON_SENSOR_CLOCK_GRAPHICS,     /* Hz */
+    NV_HWMON_SENSOR_CLOCK_MEMORY,       /* Hz */
+    NV_HWMON_SENSOR_FAN0,               /* RPM */
+    NV_HWMON_SENSOR_FAN1,               /* RPM */
+    NV_HWMON_SENSOR_COUNT
+} nv_hwmon_sensor_t;
+
+typedef struct
+{
+    NvU64 timestamp;
+    NvS64 value;
+} nv_hwmon_reading_t;
+
 typedef enum
 {
     NV_MEMORY_TYPE_SYSTEM,      /* Memory mapped for ROM, SBIOS and physical RAM. */
@@ -1302,6 +1326,8 @@ NV_STATUS  NV_API_CALL rm_ref_dynamic_power(nvidia_stack_t *, nv_state_t *, nv_d
 void       NV_API_CALL rm_unref_dynamic_power(nvidia_stack_t *, nv_state_t *, nv_dynamic_power_mode_t);
 NV_STATUS  NV_API_CALL rm_transition_dynamic_power(nvidia_stack_t *, nv_state_t *, NvBool, NvBool *);
 void       NV_API_CALL rm_get_power_info(nvidia_stack_t *, nv_state_t *, nv_power_info_t *);
+NV_STATUS  NV_API_CALL rm_hwmon_set_polling(nvidia_stack_t *, nv_state_t *, NvBool, NvBool);
+void       NV_API_CALL rm_hwmon_read(nvidia_stack_t *, nv_state_t *, nv_hwmon_reading_t *);
 
 void       NV_API_CALL rm_acpi_notify(nvidia_stack_t *, nv_state_t *, NvU32);
 void       NV_API_CALL rm_acpi_nvpcf_notify(nvidia_stack_t *);

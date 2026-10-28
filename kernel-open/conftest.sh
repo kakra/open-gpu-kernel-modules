@@ -3171,6 +3171,44 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_PCI_ENABLE_ATOMIC_OPS_TO_ROOT_PRESENT" "" "functions"
         ;;
 
+        hwmon_device_register_with_info)
+            #
+            # Determine if the function hwmon_device_register_with_info() is
+            # present.
+            #
+            # Added by commit d560168b5d0f ("hwmon: (core) New hwmon
+            # registration API") in v4.9.
+            #
+            CODE="
+            #include <linux/hwmon.h>
+            void conftest_hwmon_device_register_with_info(void) {
+                hwmon_device_register_with_info();
+            }"
+            compile_check_conftest "$CODE" "NV_HWMON_DEVICE_REGISTER_WITH_INFO_PRESENT" "" "functions"
+        ;;
+
+        hwmon_ops_read_string_has_const_str)
+            #
+            # Determine if hwmon_ops.read_string() takes a const char **.
+            # It took a char ** when the hwmon registration API was added.
+            #
+            CODE="
+            #include <linux/hwmon.h>
+            static int conftest_read_string(struct device *dev,
+                                            enum hwmon_sensor_types type,
+                                            u32 attr, int channel,
+                                            const char **str) {
+                return 0;
+            }
+
+            void conftest_hwmon_ops_read_string_has_const_str(void) {
+                struct hwmon_ops ops;
+                ops.read_string = conftest_read_string;
+            }"
+
+            compile_check_conftest "$CODE" "NV_HWMON_OPS_READ_STRING_HAS_CONST_STR" "" "types"
+        ;;
+
         dma_buf_map_attachment_unlocked)
             #
             # Determine if the function dma_buf_map_attachment_unlocked() is
