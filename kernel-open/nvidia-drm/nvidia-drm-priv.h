@@ -121,6 +121,14 @@ enum nv_drm_dithering_mode {
     NV_DRM_DITHERING_MODE_MAX
 };
 
+/* Values match the "Broadcast RGB" property of the other DRM drivers */
+enum nv_drm_broadcast_rgb {
+    NV_DRM_BROADCAST_RGB_AUTO = 0,
+    NV_DRM_BROADCAST_RGB_FULL,
+    NV_DRM_BROADCAST_RGB_LIMITED,
+    NV_DRM_BROADCAST_RGB_MAX
+};
+
 struct nv_drm_fence_context;
 
 #if defined(NV_DMA_FENCE_OPS_HAS_SET_DEADLINE)
@@ -273,6 +281,7 @@ struct nv_drm_device {
     struct drm_property *nv_crtc_color_passthrough_property;
 
     struct drm_property *nv_connector_dithering_mode_property;
+    struct drm_property *nv_connector_broadcast_rgb_property;
 
     struct drm_property *nv_connector_hdmi_vsif_metadata_property;
 

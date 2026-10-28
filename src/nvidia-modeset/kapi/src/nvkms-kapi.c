@@ -3598,6 +3598,55 @@ static NvBool NvKmsKapiRequestedModeSetConfigToKms(
     return NV_TRUE;
 }
 
+/*
+ * Store the requested output color range on the displays, the same way
+ * nvidia-settings does. The modeset that follows picks it up for RGB output,
+ * and flips that change the colorimetry keep using it.
+ */
+static void SetRequestedColorRange(
+    struct NvKmsKapiDevice *device,
+    const struct NvKmsKapiRequestedModeSetConfig *requestedConfig)
+{
+    NvU32 head;
+
+    for (head = 0;
+         head < ARRAY_LEN(requestedConfig->headRequestedConfig); head++) {
+
+        const struct NvKmsKapiHeadRequestedConfig *headRequestedConfig =
+            &requestedConfig->headRequestedConfig[head];
+        const struct NvKmsKapiHeadModeSetConfig *headModeSetConfig =
+            &headRequestedConfig->modeSetConfig;
+        NvU32 i;
+
+        if ((requestedConfig->headsMask & (1 << head)) == 0x0 ||
+            !headRequestedConfig->flags.colorRangeChanged) {
+            continue;
+        }
+
+        for (i = 0; i < headModeSetConfig->numDisplays; i++) {
+            struct NvKmsSetDpyAttributeParams params = { };
+
+            params.request.deviceHandle = device->hKmsDevice;
+            params.request.dispHandle = device->hKmsDisp;
+            params.request.dpyId =
+                nvNvU32ToDpyId(headModeSetConfig->displays[i]);
+            params.request.attribute =
+                NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_RANGE;
+            params.request.value = headModeSetConfig->limitedColorRange ?
+                NV_KMS_DPY_ATTRIBUTE_COLOR_RANGE_LIMITED :
+                NV_KMS_DPY_ATTRIBUTE_COLOR_RANGE_FULL;
+
+            if (!nvkms_ioctl_from_kapi_try_pmlock(device->pKmsOpen,
+                                                  NVKMS_IOCTL_SET_DPY_ATTRIBUTE,
+                                                  &params, sizeof(params))) {
+                nvKmsKapiLogDeviceDebug(
+                    device,
+                    "Failed to set the color range of display 0x%08x",
+                    headModeSetConfig->displays[i]);
+            }
+        }
+    }
+}
 
 static NvBool KmsSetMode(
     struct NvKmsKapiDevice *device,
@@ -3619,6 +3668,11 @@ static NvBool KmsSetMode(
                                               params,
                                               commit)) {
         goto done;
+    }
+
+    /* The range can't make a modeset fail, so a TEST_ONLY check skips it */
+    if (commit) {
+        SetRequestedColorRange(device, requestedConfig);
     }
 
     status = nvkms_ioctl_from_kapi_try_pmlock(device->pKmsOpen,
