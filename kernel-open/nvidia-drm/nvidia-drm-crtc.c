@@ -3080,6 +3080,44 @@ __nv_drm_plane_create_rotation_property(struct drm_plane *plane,
     }
 }
 
+#if defined(NV_DRM_PLANE_ADD_SIZE_HINTS_PROPERTY_PRESENT)
+/*
+ * The cursor only takes square 32, 64, 128 and 256 pixel images (see
+ * nvEvoGetHeadSetControlCursorValueC3). List them smallest first, so
+ * compositors use the smallest buffer that fits instead of always the
+ * maximum from DRM_CAP_CURSOR_WIDTH.
+ */
+static void
+__nv_drm_cursor_plane_create_size_hints_property(
+    struct nv_drm_device *nv_dev,
+    struct drm_plane *plane,
+    const struct NvKmsKapiDeviceResourcesInfo *pResInfo)
+{
+    struct drm_plane_size_hint hints[4];
+    int num_hints = 0;
+    NvU32 size;
+
+    for (size = 32; size <= pResInfo->caps.maxCursorSizeInPixels; size *= 2) {
+        /* The hardware reads a 32x32 image with a 256 byte pitch */
+        if ((size == 32) && (nv_dev->pitchAlignment < 256)) {
+            continue;
+        }
+
+        if (WARN_ON(num_hints >= ARRAY_SIZE(hints))) {
+            break;
+        }
+
+        hints[num_hints].width = size;
+        hints[num_hints].height = size;
+        num_hints++;
+    }
+
+    if (num_hints > 0) {
+        drm_plane_add_size_hints_property(plane, hints, num_hints);
+    }
+}
+#endif
+
 static struct drm_plane*
 nv_drm_plane_create(struct drm_device *dev,
                     enum drm_plane_type plane_type,
@@ -3198,6 +3236,12 @@ nv_drm_plane_create(struct drm_device *dev,
     __nv_drm_plane_create_rotation_property(
             plane,
             validLayerRRTransforms);
+
+#if defined(NV_DRM_PLANE_ADD_SIZE_HINTS_PROPERTY_PRESENT)
+    if (plane_type == DRM_PLANE_TYPE_CURSOR) {
+        __nv_drm_cursor_plane_create_size_hints_property(nv_dev, plane, pResInfo);
+    }
+#endif
 
     nv_drm_free(formats);
 
