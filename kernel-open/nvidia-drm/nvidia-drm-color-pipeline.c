@@ -661,6 +661,23 @@ int nv_drm_plane_process_color_mgmt_state(struct drm_plane *plane,
 
     /* If color pipeline is active, translate colorop state to nv_plane_state */
     if (plane_state->color_pipeline && plane_state->state->plane_color_pipeline) {
+        struct drm_crtc_state *crtc_state =
+            drm_atomic_get_new_crtc_state(plane_state->state, plane_state->crtc);
+
+        /*
+         * The CRTC DEGAMMA_LUT and CTM are implemented with the per-plane
+         * ILUT and CSC11, which the color pipeline owns: the pipeline would
+         * silently drop the CTM and apply the DEGAMMA_LUT only when its own
+         * ILUT colorops are bypassed. Reject the combination, like amdgpu
+         * does for DEGAMMA_LUT.
+         */
+        if ((crtc_state != NULL) &&
+            ((crtc_state->degamma_lut != NULL) || (crtc_state->ctm != NULL))) {
+            NV_DRM_DEV_DEBUG_DRIVER(to_nv_device(plane->dev),
+                "COLOR_PIPELINE can't be combined with the CRTC DEGAMMA_LUT or CTM");
+            return -EINVAL;
+        }
+
         /*
          * SAT_CORR has no colorop equivalent today. Force vendor SAT_CORR state
          * to default so stale vendor state cannot leak into upstream mode.
