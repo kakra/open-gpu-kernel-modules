@@ -47,6 +47,7 @@ bool nv_drm_fbdev_module_param = true;
 bool nv_drm_vblank_module_param = true;
 bool nv_drm_color_pipeline_module_param = true;
 bool nv_drm_deadline_boost_module_param = true;
+bool nv_drm_scaling_mode_module_param = true;
 
 void *nv_drm_calloc(size_t nmemb, size_t size)
 {
