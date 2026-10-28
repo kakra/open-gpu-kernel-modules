@@ -422,6 +422,12 @@ struct NvKmsKapiHeadModeSetConfig {
         enum NvKmsDpyAttributeRequestedDitheringModeValue mode;
     } dithering;
 
+    /*
+     * Requested output color range of the displays, full if false. NVKMS uses
+     * it when the color format allows a choice (RGB above 6 bpc).
+     */
+    NvBool limitedColorRange;
+
     NvBool postcompColorPassthrough;
 
     /*!
@@ -452,6 +458,7 @@ struct NvKmsKapiHeadRequestedConfig {
         NvBool olutChanged                     : 1;
         NvBool olutFpNormScaleChanged          : 1;
         NvBool ditheringChanged                : 1;
+        NvBool colorRangeChanged               : 1;
         NvBool hdmiVsifMetadataChanged         : 1;
         NvBool allmModeChanged                 : 1;
         NvBool postcompColorPassthroughChanged : 1;
