@@ -783,6 +783,82 @@ static const NvU32 __nv_drm_connector_supported_colorspaces =
 #endif
 
 #if defined(NV_DRM_CONNECTOR_ATTACH_HDR_OUTPUT_METADATA_PROPERTY_PRESENT)
+/* NVKMS drives 8, 10 or 12 bpc; round a "max bpc" value down to one of them */
+static NvU8 nv_drm_connector_round_max_bpc(unsigned int max_bpc)
+{
+    return (max_bpc >= 12) ? 12 : (max_bpc >= 10) ? 10 : 8;
+}
+
+/*
+ * A "max bpc" change only needs a modeset if it changes the bpc NVKMS drives
+ * the display with. When the new limit is still at least the current bpc and
+ * not higher than the old limit, the next modeset would pick the same bpc, so
+ * NVKMS only has to store the limit, which a flip does as well. A higher
+ * limit may allow a higher bpc, so it still needs a modeset.
+ *
+ * DRM core flags the CRTC's connectors as changed for any "max bpc" change.
+ * Only skip the modeset if that is the only reason: same CRTC, encoder, link
+ * status and color format, and the CRTC drives just this connector and stays
+ * active without other modeset changes.
+ */
+static bool
+nv_drm_connector_max_bpc_needs_modeset(struct drm_connector *connector,
+                                       nv_drm_atomic_state_base_t *state,
+                                       struct drm_crtc_state *crtc_state)
+{
+    struct nv_drm_device *nv_dev = to_nv_device(connector->dev);
+    struct nv_drm_connector *nv_connector = to_nv_connector(connector);
+    const struct drm_connector_state *old_connector_state =
+        drm_atomic_get_old_connector_state(state, connector);
+    const struct drm_connector_state *new_connector_state =
+        drm_atomic_get_new_connector_state(state, connector);
+    const struct drm_crtc_state *old_crtc_state =
+        drm_atomic_get_old_crtc_state(state, crtc_state->crtc);
+    const NvU8 old_max_bpc =
+        nv_drm_connector_round_max_bpc(old_connector_state->max_requested_bpc);
+    const NvU8 new_max_bpc =
+        nv_drm_connector_round_max_bpc(new_connector_state->max_requested_bpc);
+    NvU32 bpc = 0;
+    NvU32 stored_max_bpc = 0;
+
+    if (crtc_state->mode_changed ||
+        crtc_state->active_changed ||
+        !crtc_state->active ||
+        (old_connector_state->crtc != new_connector_state->crtc) ||
+        (old_connector_state->best_encoder !=
+         new_connector_state->best_encoder) ||
+        (old_connector_state->link_status !=
+         new_connector_state->link_status) ||
+#if defined(NV_DRM_CONNECTOR_STATE_HAS_COLOR_FORMAT)
+        (old_connector_state->color_format !=
+         new_connector_state->color_format) ||
+#endif
+        (old_crtc_state->connector_mask != crtc_state->connector_mask) ||
+        (hweight32(crtc_state->connector_mask) != 1) ||
+        (nv_connector->nv_detected_encoder == NULL)) {
+        return true;
+    }
+
+    if (new_max_bpc > old_max_bpc) {
+        return true;
+    }
+
+    /*
+     * Commits reach NVKMS before the commit ioctl returns, so NVKMS drives
+     * the display as in the old state; it must also have stored the old
+     * limit.
+     */
+    if (!nvKms->getDisplayColorBpc(nv_dev->pDevice,
+                                   nv_connector->nv_detected_encoder->hDisplay,
+                                   &bpc, &stored_max_bpc)) {
+        return true;
+    }
+
+    return (stored_max_bpc != old_max_bpc) ||
+           (bpc == 0) ||
+           (bpc > new_max_bpc);
+}
+
 static int
 __nv_drm_connector_atomic_check(struct drm_connector *connector,
                                 nv_drm_atomic_state_base_t *state)
@@ -844,7 +920,8 @@ __nv_drm_connector_atomic_check(struct drm_connector *connector,
      * Handle "max bpc". Like the color range it is only applied by a
      * modeset; DRM core already flags the CRTC when it changes. Pass it along
      * with every modeset, so it also reaches a display that is newly driven
-     * by this CRTC or was recreated by a hotplug.
+     * by this CRTC or was recreated by a hotplug. A change that keeps the
+     * current bpc is only stored, without a modeset.
      */
     if (connector->max_bpc_property != NULL) {
         const NvBool maxBpcChanged =
@@ -852,15 +929,18 @@ __nv_drm_connector_atomic_check(struct drm_connector *connector,
             new_connector_state->max_requested_bpc;
 
         if (maxBpcChanged || drm_atomic_crtc_needs_modeset(crtc_state)) {
-            const unsigned int max_bpc = new_connector_state->max_requested_bpc;
-
-            /* NVKMS drives 8, 10 or 12 bpc; round down to one of them */
             req_config->modeSetConfig.maxBpc =
-                (max_bpc >= 12) ? 12 : (max_bpc >= 10) ? 10 : 8;
+                nv_drm_connector_round_max_bpc(
+                    new_connector_state->max_requested_bpc);
             req_config->flags.maxBpcChanged = NV_TRUE;
         }
         if (maxBpcChanged) {
-            crtc_state->mode_changed = true;
+            if (nv_drm_connector_max_bpc_needs_modeset(connector, state,
+                                                       crtc_state)) {
+                crtc_state->mode_changed = true;
+            } else {
+                crtc_state->connectors_changed = false;
+            }
         }
     }
 
