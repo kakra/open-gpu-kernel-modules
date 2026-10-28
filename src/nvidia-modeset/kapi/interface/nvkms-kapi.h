@@ -433,6 +433,14 @@ struct NvKmsKapiHeadModeSetConfig {
     NvU8 maxBpc;
 
     /*
+     * Content type for the AVI InfoFrame of HDMI displays, an
+     * NvKmsDpyAttributeContentTypeValue; the DRM "content type" property.
+     * Unlike the other fields it doesn't need a modeset: it is sent with the
+     * commit, whether that is a modeset or a flip.
+     */
+    NvU8 contentType;
+
+    /*
      * Scale an image of sizeIn to the out rectangle within the mode's visible
      * area; the DRM "scaling mode" property. The layers are positioned in
      * sizeIn. When not enabled, both are the mode's visible size.
@@ -459,6 +467,7 @@ struct NvKmsKapiHeadRequestedConfig {
         NvBool ditheringChanged                : 1;
         NvBool colorRangeChanged               : 1;
         NvBool maxBpcChanged                   : 1;
+        NvBool contentTypeChanged              : 1;
         NvBool hdmiVsifMetadataChanged         : 1;
         NvBool postcompColorPassthroughChanged : 1;
     } flags;

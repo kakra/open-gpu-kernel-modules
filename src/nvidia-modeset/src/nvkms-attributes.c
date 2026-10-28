@@ -803,6 +803,57 @@ static NvBool GetRequestedColorBpcMax(const NVDpyEvoRec *pDpyEvo,
     return TRUE;
 }
 
+/*
+ * Send the AVI InfoFrame with the new content type: a new core FID, so that
+ * flip-synchronized InfoFrames switch slots, like a color range change
+ * without a modeset.
+ */
+static NvBool SetContentType(NVDpyEvoRec *pDpyEvo, NvS64 value)
+{
+    NVDispEvoRec *pDispEvo = pDpyEvo->pDispEvo;
+    NVDevEvoRec *pDevEvo = pDispEvo->pDevEvo;
+    NVEvoUpdateState updateState = { };
+
+    if ((value < NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_DEFAULT) ||
+        (value > NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_GAME)) {
+        return FALSE;
+    }
+
+    if (pDpyEvo->contentType == value) {
+        return TRUE;
+    }
+
+    pDpyEvo->contentType = value;
+
+    if ((pDpyEvo->apiHead == NV_INVALID_HEAD) || !nvDpyIsHdmiEvo(pDpyEvo)) {
+        return TRUE;
+    }
+
+    nvUpdateCoreFid(pDispEvo, pDpyEvo->apiHead, &updateState);
+    nvUpdateInfoFrames(pDpyEvo, pDevEvo->supportsFlipSynchronizedInfoframes);
+    nvEvoUpdateAndKickOff(pDispEvo, FALSE, &updateState, TRUE /* releaseElv */);
+
+    return TRUE;
+}
+
+static NvBool GetContentType(const NVDpyEvoRec *pDpyEvo, NvS64 *pValue)
+{
+    *pValue = pDpyEvo->contentType;
+    return TRUE;
+}
+
+static NvBool GetContentTypeValidValues(
+    const NVDpyEvoRec *pDpyEvo,
+    struct NvKmsAttributeValidValuesCommonReply *pValidValues)
+{
+    nvAssert(pValidValues->type == NV_KMS_ATTRIBUTE_TYPE_INTEGER);
+
+    pValidValues->u.range.min = NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_DEFAULT;
+    pValidValues->u.range.max = NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_GAME;
+
+    return TRUE;
+}
+
 static NvBool GetRequestedColorBpcMaxValidValues(
     const NVDpyEvoRec *pDpyEvo,
     struct NvKmsAttributeValidValuesCommonReply *pValidValues)
@@ -1392,6 +1443,12 @@ static const struct {
         .get            = GetRequestedColorBpcMax,
         .getValidValues = GetRequestedColorBpcMaxValidValues,
         .type           = NV_KMS_ATTRIBUTE_TYPE_INTBITS,
+    },
+    [NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE] = {
+        .set            = SetContentType,
+        .get            = GetContentType,
+        .getValidValues = GetContentTypeValidValues,
+        .type           = NV_KMS_ATTRIBUTE_TYPE_INTEGER,
     },
 };
 

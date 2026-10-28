@@ -502,6 +502,38 @@ static void UpdateInfoFrameFlipStatePost(NvEvoInfoFrameTransmitControl *currentT
 }
 
 /*
+ * Apply the content type a client requested (NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE)
+ * to the IT content and content type fields of the AVI InfoFrame.
+ */
+static void ApplyVideoInfoFrameContentType(
+    enum NvKmsDpyAttributeContentTypeValue contentType,
+    NVT_VIDEO_INFOFRAME_CTRL *pCtrl)
+{
+    switch (contentType) {
+        case NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_DEFAULT:
+            return;
+        case NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_NO_DATA:
+            pCtrl->it_content = NVT_VIDEO_INFOFRAME_BYTE3_ITC_NO_DATA;
+            pCtrl->it_content_type = NVT_VIDEO_INFOFRAME_BYTE5_CN1CN0_NODATA;
+            return;
+        case NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_GRAPHICS:
+            pCtrl->it_content_type = NVT_VIDEO_INFOFRAME_BYTE5_CN1CN0_GRAPHICS;
+            break;
+        case NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_PHOTO:
+            pCtrl->it_content_type = NVT_VIDEO_INFOFRAME_BYTE5_CN1CN0_PHOTO;
+            break;
+        case NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_CINEMA:
+            pCtrl->it_content_type = NVT_VIDEO_INFOFRAME_BYTE5_CN1CN0_CINEMA;
+            break;
+        case NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_GAME:
+            pCtrl->it_content_type = NVT_VIDEO_INFOFRAME_BYTE5_CN1CN0_GAME;
+            break;
+    }
+
+    pCtrl->it_content = NVT_VIDEO_INFOFRAME_BYTE3_ITC_IT_CONTENT;
+}
+
+/*
  * SendVideoInfoFrame() - Construct video infoframe using provided EDID and call
  * ->SendHdmiInfoFrame() to send it to RM.
  */
@@ -511,6 +543,7 @@ static void SendVideoInfoFrame(const NVDispEvoRec *pDispEvo,
                                const NVDispHeadInfoFrameStateEvoRec *pInfoFrameState,
                                NvEvoInfoFrameTransmitControl *currentTransmitCtrl,
                                NvEvoInfoFrameTransmitControl *newTransmitCtrl,
+                               enum NvKmsDpyAttributeContentTypeValue contentType,
                                NVT_EDID_INFO *pEdidInfo)
 {
     const NVDevEvoRec *pDevEvo = pDispEvo->pDevEvo;
@@ -520,6 +553,7 @@ static void SendVideoInfoFrame(const NVDispEvoRec *pDispEvo,
     NVT_STATUS status;
 
     CalculateVideoInfoFrameColorFormat(pDpyColor, hdTimings, pEdidInfo, &videoCtrl);
+    ApplyVideoInfoFrameContentType(contentType, &videoCtrl);
 
     status = NvTiming_ConstructVideoInfoframe(pEdidInfo,
                                               &videoCtrl,
@@ -739,6 +773,7 @@ void nvUpdateHdmiInfoFrames(const NVDispEvoRec *pDispEvo,
                        pInfoFrameState,
                        &flipState->videoInfoframeTransmitCtrl,
                        newTransmitCtrl,
+                       pDpyEvo->contentType,
                        &pDpyEvo->parsedEdid.info);
 
     SendVendorSpecificInfoFrame(pDispEvo,

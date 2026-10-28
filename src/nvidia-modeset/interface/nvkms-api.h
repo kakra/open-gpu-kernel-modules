@@ -2771,6 +2771,25 @@ enum NvKmsDpyAttribute {
      * support, but never less than the colorimetry requires.
      */
     NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_BPC_MAX,
+
+    /*
+     * Content type signalled to HDMI sinks in the AVI InfoFrame (ITC and
+     * CN1:CN0), like the DRM "content type" connector property. Takes an
+     * NvKmsDpyAttributeContentTypeValue. Sent right away when the display is
+     * active, and with every following InfoFrame update. DEFAULT keeps what
+     * NVKMS chooses itself (IT content, graphics, for CTA modes).
+     */
+    NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE,
+};
+
+/*! Values for the NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE attribute. */
+enum NvKmsDpyAttributeContentTypeValue {
+    NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_DEFAULT = 0,
+    NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_NO_DATA = 1,
+    NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_GRAPHICS = 2,
+    NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_PHOTO = 3,
+    NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_CINEMA = 4,
+    NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_GAME = 5,
 };
 
 /*

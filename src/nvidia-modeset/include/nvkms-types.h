@@ -2358,6 +2358,9 @@ typedef struct _NVDpyEvoRec {
     /* NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_BPC_MAX; UNKNOWN for no limit */
     enum NvKmsDpyAttributeColorBpcValue requestedColorBpcMax;
 
+    /* NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE */
+    enum NvKmsDpyAttributeContentTypeValue contentType;
+
     NVAttributesSetEvoRec currentAttributes;
 
     nvkms_timer_handle_t *hdrToSdrTransitionTimer;

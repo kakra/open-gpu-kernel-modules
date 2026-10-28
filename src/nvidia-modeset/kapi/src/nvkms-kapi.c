@@ -3702,6 +3702,53 @@ static void SetRequestedColorBpcMax(
     }
 }
 
+/*
+ * Store the requested content type on the displays; NVKMS sends the AVI
+ * InfoFrame right away for active displays. It can't make a commit fail, so
+ * a TEST_ONLY check skips it.
+ */
+static void SetContentType(
+    struct NvKmsKapiDevice *device,
+    const struct NvKmsKapiRequestedModeSetConfig *requestedConfig)
+{
+    NvU32 head;
+
+    for (head = 0;
+         head < ARRAY_LEN(requestedConfig->headRequestedConfig); head++) {
+
+        const struct NvKmsKapiHeadRequestedConfig *headRequestedConfig =
+            &requestedConfig->headRequestedConfig[head];
+        const struct NvKmsKapiHeadModeSetConfig *headModeSetConfig =
+            &headRequestedConfig->modeSetConfig;
+        NvU32 i;
+
+        if ((requestedConfig->headsMask & (1 << head)) == 0x0 ||
+            !headRequestedConfig->flags.contentTypeChanged) {
+            continue;
+        }
+
+        for (i = 0; i < headModeSetConfig->numDisplays; i++) {
+            struct NvKmsSetDpyAttributeParams params = { };
+
+            params.request.deviceHandle = device->hKmsDevice;
+            params.request.dispHandle = device->hKmsDisp;
+            params.request.dpyId =
+                nvNvU32ToDpyId(headModeSetConfig->displays[i]);
+            params.request.attribute = NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE;
+            params.request.value = headModeSetConfig->contentType;
+
+            if (!nvkms_ioctl_from_kapi_try_pmlock(device->pKmsOpen,
+                                                  NVKMS_IOCTL_SET_DPY_ATTRIBUTE,
+                                                  &params, sizeof(params))) {
+                nvKmsKapiLogDeviceDebug(
+                    device,
+                    "Failed to set the content type of display 0x%08x",
+                    headModeSetConfig->displays[i]);
+            }
+        }
+    }
+}
+
 static NvBool GetDisplayAttribute(
     struct NvKmsKapiDevice *device,
     NvKmsKapiDisplay display,
@@ -4132,6 +4179,14 @@ static NvBool ApplyModeSetConfig(
         if (bRequiredModeset) {
             break;
         }
+    }
+
+    /*
+     * The content type is sent without a modeset, so set it for flips too.
+     * A modeset sends the AVI InfoFrame of newly driven displays with it.
+     */
+    if (commit) {
+        SetContentType(device, requestedConfig);
     }
 
     if (bRequiredModeset) {
