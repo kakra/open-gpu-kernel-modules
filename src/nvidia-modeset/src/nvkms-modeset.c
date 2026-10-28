@@ -390,6 +390,16 @@ GetColorFormatAndColorRange(
         }
     }
 
+    /*
+     * Start from at most the requested bpc limit. The bpc stays unspecified,
+     * so mode validation can still lower it further to fit the link.
+     */
+    if (ret && !pRequestHead->colorBpcSpecified) {
+        nvLimitColorBpcEvo(pOneArbitraryDpyEvo,
+                           pOneArbitraryDpyEvo->requestedColorBpcMax,
+                           pDpyColor);
+    }
+
     return ret;
 }
 
