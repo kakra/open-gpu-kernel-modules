@@ -432,6 +432,17 @@ struct NvKmsKapiHeadModeSetConfig {
      */
     NvU8 maxBpc;
 
+    /*
+     * Scale an image of sizeIn to the out rectangle within the mode's visible
+     * area; the DRM "scaling mode" property. The layers are positioned in
+     * sizeIn. When not enabled, both are the mode's visible size.
+     */
+    struct {
+        NvBool enabled;
+        struct NvKmsSize sizeIn;
+        struct NvKmsRect out;
+    } viewPort;
+
     NvBool postcompColorPassthrough;
 };
 

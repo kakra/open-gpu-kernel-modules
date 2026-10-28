@@ -3576,10 +3576,16 @@ static NvBool NvKmsKapiRequestedModeSetConfigToKms(
         paramsHead->flip.colorimetry.specified = NV_TRUE;
         paramsHead->flip.colorimetry.val = headModeSetConfig->colorimetry;
 
-        paramsHead->viewPortSizeIn.width =
-            headModeSetConfig->mode.timings.hVisible;
-        paramsHead->viewPortSizeIn.height =
-            headModeSetConfig->mode.timings.vVisible;
+        if (headModeSetConfig->viewPort.enabled) {
+            paramsHead->viewPortSizeIn = headModeSetConfig->viewPort.sizeIn;
+            paramsHead->viewPortOut = headModeSetConfig->viewPort.out;
+            paramsHead->viewPortOutSpecified = NV_TRUE;
+        } else {
+            paramsHead->viewPortSizeIn.width =
+                headModeSetConfig->mode.timings.hVisible;
+            paramsHead->viewPortSizeIn.height =
+                headModeSetConfig->mode.timings.vVisible;
+        }
 
         paramsHead->allowGsync = NV_TRUE;
         paramsHead->allowAdaptiveSync = NVKMS_ALLOW_ADAPTIVE_SYNC_ALL;

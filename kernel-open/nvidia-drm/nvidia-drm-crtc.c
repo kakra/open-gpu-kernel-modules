@@ -2714,9 +2714,17 @@ static int nv_drm_crtc_atomic_check(struct drm_crtc *crtc,
         &nv_crtc_state->req_config;
     int ret = 0;
 
-    if (crtc_state->mode_changed) {
-        drm_mode_to_nvkms_display_mode(&crtc_state->mode,
+    /*
+     * Drive the adjusted mode: with "scaling mode" the encoder check replaces
+     * it with the display's native timings and sets up the viewport. DRM core
+     * resets it from the mode in these cases.
+     */
+    if (crtc_state->mode_changed || crtc_state->connectors_changed) {
+        drm_mode_to_nvkms_display_mode(&crtc_state->adjusted_mode,
                                        &req_config->modeSetConfig.mode);
+    }
+
+    if (crtc_state->mode_changed) {
         req_config->flags.modeChanged = NV_TRUE;
     }
 

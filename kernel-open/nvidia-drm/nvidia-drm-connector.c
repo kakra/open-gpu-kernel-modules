@@ -546,6 +546,93 @@ static struct drm_connector_funcs nv_connector_funcs = {
 #endif
 };
 
+/*
+ * Remember the modes at the native resolution: the size of the preferred
+ * mode, or the largest size if the display has no preferred mode.
+ */
+static void nv_drm_connector_save_native_mode(
+    struct nv_drm_connector *nv_connector,
+    const struct drm_display_mode *mode)
+{
+    const bool preferred = (mode->type & DRM_MODE_TYPE_PREFERRED) != 0;
+
+    spin_lock(&nv_connector->native_modes_lock);
+
+    if (nv_connector->num_native_modes > 0) {
+        const struct drm_display_mode *native = &nv_connector->native_modes[0];
+        const bool same_size = (mode->hdisplay == native->hdisplay) &&
+                               (mode->vdisplay == native->vdisplay);
+        const bool larger =
+            ((u32)mode->hdisplay * mode->vdisplay) >
+            ((u32)native->hdisplay * native->vdisplay);
+
+        if (!same_size) {
+            if (nv_connector->native_mode_preferred ||
+                (!preferred && !larger)) {
+                goto done;
+            }
+            nv_connector->num_native_modes = 0;
+        }
+    }
+
+    if (preferred) {
+        nv_connector->native_mode_preferred = true;
+    }
+
+    if (nv_connector->num_native_modes < NV_DRM_CONNECTOR_MAX_NATIVE_MODES) {
+        drm_mode_copy(
+            &nv_connector->native_modes[nv_connector->num_native_modes++],
+            mode);
+    }
+
+done:
+    spin_unlock(&nv_connector->native_modes_lock);
+}
+
+static void nv_drm_connector_clear_native_modes(
+    struct nv_drm_connector *nv_connector)
+{
+    spin_lock(&nv_connector->native_modes_lock);
+    nv_connector->num_native_modes = 0;
+    nv_connector->native_mode_preferred = false;
+    spin_unlock(&nv_connector->native_modes_lock);
+}
+
+/*
+ * Find the native-resolution mode with the refresh rate closest to vrefresh.
+ * Returns false if the display has none (not probed yet).
+ */
+bool nv_drm_connector_get_native_mode(struct nv_drm_connector *nv_connector,
+                                      int vrefresh,
+                                      struct drm_display_mode *native_mode)
+{
+    unsigned int best = 0;
+    int best_diff = INT_MAX;
+    unsigned int i;
+    bool found;
+
+    spin_lock(&nv_connector->native_modes_lock);
+
+    for (i = 0; i < nv_connector->num_native_modes; i++) {
+        const int diff =
+            abs(drm_mode_vrefresh(&nv_connector->native_modes[i]) - vrefresh);
+
+        if (diff < best_diff) {
+            best_diff = diff;
+            best = i;
+        }
+    }
+
+    found = nv_connector->num_native_modes > 0;
+    if (found) {
+        drm_mode_copy(native_mode, &nv_connector->native_modes[best]);
+    }
+
+    spin_unlock(&nv_connector->native_modes_lock);
+
+    return found;
+}
+
 static int nv_drm_connector_get_modes(struct drm_connector *connector)
 {
     struct drm_device *dev = connector->dev;
@@ -560,6 +647,8 @@ static int nv_drm_connector_get_modes(struct drm_connector *connector)
     if (nv_connector->edid != NULL) {
         nv_drm_connector_update_edid_property(connector, nv_connector->edid);
     }
+
+    nv_drm_connector_clear_native_modes(nv_connector);
 
     while (1) {
         struct drm_display_mode *mode;
@@ -608,6 +697,8 @@ static int nv_drm_connector_get_modes(struct drm_connector *connector)
         if (preferredMode) {
             mode->type |= DRM_MODE_TYPE_PREFERRED;
         }
+
+        nv_drm_connector_save_native_mode(nv_connector, mode);
 
         /* Add a mode to a connector's probed_mode list */
 
@@ -745,6 +836,15 @@ __nv_drm_connector_atomic_check(struct drm_connector *connector,
         if (maxBpcChanged) {
             crtc_state->mode_changed = true;
         }
+    }
+
+    /*
+     * Handle "scaling mode". It decides the raster timings and the viewport
+     * the encoder check derives from the mode, so it needs a modeset.
+     */
+    if (old_connector_state->scaling_mode !=
+        new_connector_state->scaling_mode) {
+        crtc_state->mode_changed = true;
     }
 
     /* Handle HDMI VSIF metadata changes */
@@ -898,6 +998,7 @@ nv_drm_connector_new(struct drm_device *dev,
     nv_connector->internal = internal;
     nv_connector->modeset_permission_filep = NULL;
     nv_connector->modeset_permission_crtc = NULL;
+    spin_lock_init(&nv_connector->native_modes_lock);
     nv_connector->cp = NVKMS_CONTENT_PROTECTION_OFF;
 
     strcpy(nv_connector->dpAddress, dpAddress);
@@ -998,6 +1099,24 @@ nv_drm_connector_new(struct drm_device *dev,
                 "Failed to attach the max bpc property to connector created from physical index %u",
                 nv_connector->physicalIndex);
         }
+    }
+
+    /*
+     * The head scaler can show a mode smaller than the display's native
+     * resolution at the native timings. Like on other drivers, no scaling is
+     * the default; then the mode is driven as requested.
+     */
+    if (nv_drm_scaling_mode_module_param &&
+        drm_connector_attach_scaling_mode_property(
+            &nv_connector->base,
+            BIT(DRM_MODE_SCALE_NONE) |
+            BIT(DRM_MODE_SCALE_FULLSCREEN) |
+            BIT(DRM_MODE_SCALE_CENTER) |
+            BIT(DRM_MODE_SCALE_ASPECT)) != 0) {
+        NV_DRM_DEV_LOG_ERR(
+            nv_dev,
+            "Failed to attach the scaling mode property to connector created from physical index %u",
+            nv_connector->physicalIndex);
     }
 #endif
 

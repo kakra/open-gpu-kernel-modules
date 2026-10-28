@@ -59,11 +59,97 @@ static const struct drm_encoder_funcs nv_encoder_funcs = {
     .destroy = nv_drm_encoder_destroy,
 };
 
-static bool nv_drm_encoder_mode_fixup(struct drm_encoder *encoder,
-                                      const struct drm_display_mode *mode,
-                                      struct drm_display_mode *adjusted_mode)
+/*
+ * Implement "scaling mode": show a mode smaller than the display's native
+ * resolution by driving the native timings with the closest refresh rate and
+ * scaling the mode's area with the head scaler. Displays such as laptop
+ * panels often accept no other timings. The CRTC's mode keeps the requested
+ * size, which is what the layers are positioned in; the adjusted mode gets
+ * the timings that are driven.
+ */
+static int nv_drm_encoder_atomic_check(struct drm_encoder *encoder,
+                                       struct drm_crtc_state *crtc_state,
+                                       struct drm_connector_state *conn_state)
 {
-    return true;
+    struct nv_drm_connector *nv_connector =
+        to_nv_connector(conn_state->connector);
+    struct nv_drm_crtc_state *nv_crtc_state = to_nv_crtc_state(crtc_state);
+    struct NvKmsKapiHeadModeSetConfig *config =
+        &nv_crtc_state->req_config.modeSetConfig;
+    const struct drm_display_mode *mode = &crtc_state->mode;
+    struct drm_display_mode native = { };
+    struct NvKmsRect out;
+
+    /* DRM core only resets the adjusted mode in these cases */
+    if (!crtc_state->mode_changed && !crtc_state->connectors_changed) {
+        return 0;
+    }
+
+    config->viewPort.enabled = NV_FALSE;
+
+    if (!crtc_state->enable ||
+        (conn_state->scaling_mode == DRM_MODE_SCALE_NONE) ||
+        (hweight32(crtc_state->connector_mask) != 1) ||
+        (mode->flags & (DRM_MODE_FLAG_INTERLACE | DRM_MODE_FLAG_DBLSCAN))) {
+        return 0;
+    }
+
+    if (!nv_drm_connector_get_native_mode(nv_connector,
+                                          drm_mode_vrefresh(mode),
+                                          &native)) {
+        return 0;
+    }
+
+    /*
+     * Drive the native size as requested, and leave larger modes to mode
+     * validation; the head scaler only upscales here.
+     */
+    if (((mode->hdisplay == native.hdisplay) &&
+         (mode->vdisplay == native.vdisplay)) ||
+        (mode->hdisplay > native.hdisplay) ||
+        (mode->vdisplay > native.vdisplay) ||
+        (mode->hdisplay == 0) || (mode->vdisplay == 0)) {
+        return 0;
+    }
+
+    switch (conn_state->scaling_mode) {
+    case DRM_MODE_SCALE_CENTER:
+        out.width = mode->hdisplay;
+        out.height = mode->vdisplay;
+        break;
+    case DRM_MODE_SCALE_ASPECT:
+        if ((u32)mode->hdisplay * native.vdisplay >
+            (u32)mode->vdisplay * native.hdisplay) {
+            /* Wider than the display: fill the width */
+            out.width = native.hdisplay;
+            out.height = DIV_ROUND_CLOSEST((u32)mode->vdisplay *
+                                           native.hdisplay,
+                                           mode->hdisplay);
+        } else {
+            out.width = DIV_ROUND_CLOSEST((u32)mode->hdisplay *
+                                          native.vdisplay,
+                                          mode->vdisplay);
+            out.height = native.vdisplay;
+        }
+        break;
+    case DRM_MODE_SCALE_FULLSCREEN:
+    default:
+        out.width = native.hdisplay;
+        out.height = native.vdisplay;
+        break;
+    }
+
+    out.x = (native.hdisplay - out.width) / 2;
+    out.y = (native.vdisplay - out.height) / 2;
+
+    drm_mode_copy(&crtc_state->adjusted_mode, &native);
+
+    config->viewPort.enabled = NV_TRUE;
+    config->viewPort.sizeIn.width = mode->hdisplay;
+    config->viewPort.sizeIn.height = mode->vdisplay;
+    config->viewPort.out = out;
+
+    return 0;
 }
 
 static void nv_drm_encoder_prepare(struct drm_encoder *encoder)
@@ -84,7 +170,7 @@ static void nv_drm_encoder_mode_set(struct drm_encoder *encoder,
 }
 
 static const struct drm_encoder_helper_funcs nv_encoder_helper_funcs = {
-    .mode_fixup = nv_drm_encoder_mode_fixup,
+    .atomic_check = nv_drm_encoder_atomic_check,
     .prepare    = nv_drm_encoder_prepare,
     .commit     = nv_drm_encoder_commit,
     .mode_set   = nv_drm_encoder_mode_set,
