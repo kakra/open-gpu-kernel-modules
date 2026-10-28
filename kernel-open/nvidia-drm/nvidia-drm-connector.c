@@ -1003,6 +1003,64 @@ static const struct drm_connector_helper_funcs nv_connector_helper_funcs = {
 #endif
 };
 
+/*
+ * Set the standard PATH property of a DisplayPort MST connector, in the form
+ * DRM's MST helpers use: "mst:<root connector id>-<port>-...-<port>".
+ * Compositors identify MST outputs by it, so that their settings survive
+ * replugging a dock. NVKMS names an MST display by the port numbers along
+ * its path from the root branch, separated by '.', e.g. "1.8"; the root
+ * connector is the one of the same physical connector without an address.
+ */
+static void nv_drm_connector_set_mst_path(struct nv_drm_connector *nv_connector)
+{
+    struct drm_device *dev = nv_connector->base.dev;
+    struct nv_drm_device *nv_dev = to_nv_device(dev);
+    struct drm_connector *connector;
+    struct drm_connector_list_iter conn_iter;
+    char path[16 + NVKMS_DP_ADDRESS_STRING_LENGTH];
+    const char *p;
+    int root_id = -1;
+    size_t len;
+
+    if ((nv_connector->dpAddress[0] == '\0') ||
+        (dev->mode_config.path_property == NULL)) {
+        return;
+    }
+
+    drm_connector_list_iter_begin(dev, &conn_iter);
+    drm_for_each_connector_iter(connector, &conn_iter) {
+        const struct nv_drm_connector *root = to_nv_connector(connector);
+
+        if ((root->physicalIndex == nv_connector->physicalIndex) &&
+            (root->dpAddress[0] == '\0')) {
+            root_id = connector->base.id;
+            break;
+        }
+    }
+    drm_connector_list_iter_end(&conn_iter);
+
+    if (root_id < 0) {
+        return;
+    }
+
+    len = scnprintf(path, sizeof(path), "mst:%d-", root_id);
+    for (p = nv_connector->dpAddress;
+         (*p != '\0') && (len < sizeof(path) - 1); p++) {
+        path[len++] = (*p == '.') ? '-' : *p;
+    }
+    path[len] = '\0';
+
+    drm_object_attach_property(&nv_connector->base.base,
+                               dev->mode_config.path_property, 0);
+
+    if (drm_connector_set_path_property(&nv_connector->base, path) != 0) {
+        NV_DRM_DEV_LOG_ERR(
+            nv_dev,
+            "Failed to set the path property of connector created from physical index %u",
+            nv_connector->physicalIndex);
+    }
+}
+
 static struct drm_connector*
 nv_drm_connector_new(struct drm_device *dev,
                      NvU32 physicalIndex, NvKmsConnectorType type,
@@ -1177,6 +1235,8 @@ nv_drm_connector_new(struct drm_device *dev,
     }
 
     /* Register connector with DRM subsystem */
+
+    nv_drm_connector_set_mst_path(nv_connector);
 
     ret = drm_connector_register(&nv_connector->base);
 
