@@ -3725,6 +3725,19 @@ static void nv_drm_vblank_disable_fn(void *t)
 }
 
 /*
+ * Unregister the NVKMS vblank callback if it is still registered at device
+ * teardown. Only the fbdev shutdown commit turns vblank off before unload,
+ * and once the vblank worker is stopped the disable work can't be queued
+ * anymore, so without this the callback would outlive the CRTC it points
+ * to. Call after the vblank worker is stopped and before the CRTCs are
+ * destroyed.
+ */
+void nv_drm_crtc_vblank_teardown(struct nv_drm_crtc *nv_crtc)
+{
+    nv_drm_vblank_disable_fn(nv_crtc);
+}
+
+/*
  * Add drm crtc for given head and supported enum NvKmsSurfaceMemoryFormats.
  */
 static struct drm_crtc *__nv_drm_crtc_create(struct nv_drm_device *nv_dev,

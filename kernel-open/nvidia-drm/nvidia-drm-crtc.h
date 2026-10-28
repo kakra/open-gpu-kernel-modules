@@ -373,6 +373,8 @@ bool nv_drm_crtc_defer_flip_to_pending(struct nv_drm_crtc *nv_crtc,
 void nv_drm_crtc_set_vblank_duration(struct nv_drm_crtc *nv_crtc,
                                      const struct drm_crtc_state *crtc_state);
 
+void nv_drm_crtc_vblank_teardown(struct nv_drm_crtc *nv_crtc);
+
 /*
  * CRTCs are static objects, list does not change once after initialization and
  * before teardown of device. Initialization/teardown paths are single
