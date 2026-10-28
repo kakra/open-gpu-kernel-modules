@@ -680,7 +680,7 @@ int nv_drm_atomic_check(struct drm_device *dev,
 
                 /* Check if HDR metadata or colorspace changed */
                 if (hdr_changed || colorspace_changed || vsif_metadata_changed) {
-                    NV_DRM_LOG_INFO("Infoframe changed on CRTC %d (hdr=%d colorspace=%d vsif=%d), adding planes on CRTC to atomic commit\n",
+                    NV_DRM_DEBUG_DRIVER("Infoframe changed on CRTC %d (hdr=%d colorspace=%d vsif=%d), adding planes on CRTC to atomic commit",
                            to_nv_crtc(crtc)->head,
                            hdr_changed,
                            colorspace_changed,
