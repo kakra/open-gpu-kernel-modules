@@ -291,3 +291,5 @@ NV_CONFTEST_GENERIC_COMPILE_TESTS += memory_failure_mf_sw_simulated_defined
 NV_CONFTEST_GENERIC_COMPILE_TESTS += device_vm_build
 NV_CONFTEST_GENERIC_COMPILE_TESTS += pcie_reset_flr
 NV_CONFTEST_GENERIC_COMPILE_TESTS += module_import_ns_takes_constant
+NV_CONFTEST_GENERIC_COMPILE_TESTS += is_export_symbol_present_system_percpu_wq
+NV_CONFTEST_GENERIC_COMPILE_TESTS += is_export_symbol_present_system_dfl_wq

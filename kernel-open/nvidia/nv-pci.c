@@ -1774,7 +1774,7 @@ nv_pci_gb10b_devfreq_enable_boost(struct device *dev, unsigned int duration, int
         if (duration != 0)
         {
             INIT_DELAYED_WORK(&tdev->boost_disable, nv_pci_devfreq_disable_boost);
-            schedule_delayed_work(&tdev->boost_disable, delay);
+            queue_delayed_work(nv_percpu_wq, &tdev->boost_disable, delay);
         }
     }
 
@@ -1786,7 +1786,7 @@ nv_pci_gb10b_devfreq_enable_boost(struct device *dev, unsigned int duration, int
         if (duration != 0)
         {
             INIT_DELAYED_WORK(&tdev->boost_disable, nv_pci_devfreq_disable_boost);
-            schedule_delayed_work(&tdev->boost_disable, delay);
+            queue_delayed_work(nv_percpu_wq, &tdev->boost_disable, delay);
         }
     }
 

@@ -529,7 +529,7 @@ static NvBool nv_defer_free_pages(nv_alloc_t *at)
     }
 
     if (llist_add(&at->deferred_free_node, &nv_deferred_free_list))
-        queue_work(system_unbound_wq, &nv_deferred_free_work);
+        queue_work(nv_dfl_wq, &nv_deferred_free_work);
 
     return NV_TRUE;
 }

@@ -1227,7 +1227,7 @@ static void nv_account_mm_free(nv_linux_mm_free_work_t *mm_work)
     atomic_long_add_return(-mm_work->num_pages, &mm_work->mm->rss_stat.count[MM_SHMEMPAGES]);
 #endif
 
-    schedule_work(&mm_work->task);
+    queue_work(nv_percpu_wq, &mm_work->task);
 }
 
 void
