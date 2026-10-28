@@ -983,7 +983,13 @@ static void nv_drm_dev_unload(struct drm_device *dev)
     drm_kms_helper_poll_fini(dev);
 
     if (nv_drm_vblank_module_param) {
+        struct drm_crtc *crtc;
+
         nv_drm_workthread_shutdown(&nv_dev->vblank_worker);
+
+        nv_drm_for_each_crtc(crtc, dev) {
+            nv_drm_crtc_vblank_teardown(to_nv_crtc(crtc));
+        }
     }
 
     nv_drm_held_fbs_fini(nv_dev);
