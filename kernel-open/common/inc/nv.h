@@ -792,6 +792,10 @@ typedef enum
     NV_HWMON_SENSOR_CLOCK_MEMORY,       /* Hz */
     NV_HWMON_SENSOR_FAN0,               /* RPM */
     NV_HWMON_SENSOR_FAN1,               /* RPM */
+    NV_HWMON_SENSOR_GPU_BUSY,           /* percent */
+    NV_HWMON_SENSOR_MEM_BUSY,           /* percent */
+    NV_HWMON_SENSOR_VRAM_TOTAL,         /* bytes, kept current by RM, not polled */
+    NV_HWMON_SENSOR_VRAM_USED,          /* bytes, kept current by RM, not polled */
     NV_HWMON_SENSOR_COUNT
 } nv_hwmon_sensor_t;
 

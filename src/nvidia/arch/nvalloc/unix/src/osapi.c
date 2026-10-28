@@ -4357,6 +4357,7 @@ void NV_API_CALL rm_request_dnotifier_state(
 }
 
 #define RM_HWMON_POLLED_DATA_MASK (NV00DE_RUSD_POLL_CLOCK |   \
+                                   NV00DE_RUSD_POLL_PERF |    \
                                    NV00DE_RUSD_POLL_POWER |   \
                                    NV00DE_RUSD_POLL_THERMAL | \
                                    NV00DE_RUSD_POLL_FAN)
@@ -4440,6 +4441,8 @@ void NV_API_CALL rm_hwmon_read(
     RUSD_POWER_LIMITS    powerLimit;
     RUSD_CLK_PUBLIC_DOMAIN_INFOS clocks;
     RUSD_FAN_COOLER_STATUS fans;
+    RUSD_PERF_DEVICE_UTILIZATION util;
+    RUSD_PMA_MEMORY_INFO pmaInfo;
     NvU32                i;
 
     NV_ENTER_RM_RUNTIME(sp,fp);
@@ -4515,6 +4518,45 @@ void NV_API_CALL rm_hwmon_read(
         {
             RM_HWMON_SET(NV_HWMON_SENSOR_FAN0 + i, fans.lastModifiedTimestamp,
                          fans.info.rpmCurr[i]);
+        }
+    }
+
+    // An idle GPU reads 0 % busy, so utilization is reported whenever the data is valid
+    if (RUSD_READ_DATA(pSharedData, perfDevUtil, &util))
+    {
+        RM_HWMON_SET(NV_HWMON_SENSOR_GPU_BUSY, util.lastModifiedTimestamp,
+                     NV_MIN(util.info.gpuPercentBusy, 100));
+        RM_HWMON_SET(NV_HWMON_SENSOR_MEM_BUSY, util.lastModifiedTimestamp,
+                     NV_MIN(util.info.memoryPercentBusy, 100));
+    }
+
+    //
+    // Free memory is updated by the CPU RM PMA on every allocation and free,
+    // not by GSP polling. The total is the whole FB as reported by
+    // NV2080_CTRL_FB_INFO_INDEX_TOTAL_RAM_SIZE (fixed after init), so "used"
+    // includes what RM reserves outside PMA, as on amdgpu.
+    //
+    if (!IS_MIG_ENABLED(pGpu) &&
+        RUSD_READ_DATA(pSharedData, pmaMemoryInfo, &pmaInfo))
+    {
+        MemoryManager *pMemoryManager = GPU_GET_MEMORY_MANAGER(pGpu);
+        KernelMemorySystem *pKernelMemorySystem = GPU_GET_KERNEL_MEMORY_SYSTEM(pGpu);
+        NvU64 fbTotal = 0;
+
+        if ((pMemoryManager != NULL) && (pKernelMemorySystem != NULL))
+        {
+            fbTotal = memmgrGetTotalRamSizeBytes(pGpu, pMemoryManager, pKernelMemorySystem,
+                                                 NULL, NULL, NV_FALSE);
+        }
+
+        if ((pmaInfo.totalPmaMemory != 0) &&
+            (pmaInfo.totalPmaMemory <= fbTotal) &&
+            (pmaInfo.freePmaMemory <= pmaInfo.totalPmaMemory))
+        {
+            RM_HWMON_SET(NV_HWMON_SENSOR_VRAM_TOTAL, pmaInfo.lastModifiedTimestamp,
+                         (NvS64)fbTotal);
+            RM_HWMON_SET(NV_HWMON_SENSOR_VRAM_USED, pmaInfo.lastModifiedTimestamp,
+                         (NvS64)(fbTotal - pmaInfo.freePmaMemory));
         }
     }
 

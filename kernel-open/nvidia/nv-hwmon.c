@@ -27,7 +27,8 @@
  * The values come from the RM user shared data (RUSD) page, which GSP fills
  * while someone asks it to poll. Reading the page is lockless and never
  * touches the GPU. Polling is requested on the first read and stopped again
- * NV_HWMON_IDLE_TIMEOUT after the last one. While the GPU is runtime
+ * NV_HWMON_IDLE_TIMEOUT after the last one. VRAM usage is kept in the page
+ * by RM on every allocation and needs no polling. While the GPU is runtime
  * suspended the sensors return -ENODATA instead of waking it.
  *
  * The device is registered only while the adapter is initialized, so a read
@@ -60,6 +61,13 @@
 static bool nv_hwmon_enable = true;
 module_param_named(hwmon, nv_hwmon_enable, bool, 0444);
 MODULE_PARM_DESC(hwmon, "Register a hwmon device with the GPU sensors (default: 1).");
+
+/* VRAM usage is kept current by RM itself; everything else needs GSP polling */
+static NvBool nv_hwmon_sensor_polled(unsigned int sensor)
+{
+    return (sensor != NV_HWMON_SENSOR_VRAM_TOTAL) &&
+           (sensor != NV_HWMON_SENSOR_VRAM_USED);
+}
 
 static NV_STATUS nv_hwmon_set_polling(nv_linux_state_t *nvl, NvBool enable, NvBool force)
 {
@@ -98,7 +106,10 @@ static int nv_hwmon_snapshot(nv_linux_state_t *nvl,
     *heartbeat = 0;
     for (i = 0; i < NV_HWMON_SENSOR_COUNT; i++)
     {
-        *heartbeat += readings[i].timestamp;
+        if (nv_hwmon_sensor_polled(i))
+        {
+            *heartbeat += readings[i].timestamp;
+        }
     }
 
     return 0;
@@ -151,14 +162,19 @@ static int nv_hwmon_get(nv_linux_state_t *nvl, nv_hwmon_sensor_t sensor, long *v
         return -ENODATA;
     }
 
-    hw->last_read = jiffies;
-
     /* Taken before polling starts so the first new sample counts as fresh */
     rc = nv_hwmon_snapshot(nvl, readings, &heartbeat);
     if (rc != 0)
     {
         return rc;
     }
+
+    if (!nv_hwmon_sensor_polled(sensor))
+    {
+        goto out;
+    }
+
+    hw->last_read = jiffies;
 
     if (!hw->polling)
     {
@@ -211,6 +227,7 @@ static int nv_hwmon_get(nv_linux_state_t *nvl, nv_hwmon_sensor_t sensor, long *v
         hw->stale = NV_FALSE;
     }
 
+out:
     if (readings[sensor].timestamp == 0)
     {
         return -ENODATA;
@@ -370,10 +387,14 @@ static const struct hwmon_chip_info nv_hwmon_chip_info = {
     .info = nv_hwmon_info,
 };
 
-/* hwmon has no frequency sensor type; amdgpu uses freqN_input/label too */
-static ssize_t nv_hwmon_freq_show(struct device *dev,
-                                  struct device_attribute *attr,
-                                  char *buf)
+/*
+ * hwmon has no frequency, utilization or memory sensor types. The names
+ * follow amdgpu: freqN_input/label on its hwmon device, the busy and VRAM
+ * files on its PCI device.
+ */
+static ssize_t nv_hwmon_value_show(struct device *dev,
+                                   struct device_attribute *attr,
+                                   char *buf)
 {
     nv_linux_state_t *nvl = dev_get_drvdata(dev);
     long val;
@@ -401,20 +422,32 @@ static ssize_t nv_hwmon_freq_label_show(struct device *dev,
                      (sensor == NV_HWMON_SENSOR_CLOCK_GRAPHICS) ? "gpu" : "mem");
 }
 
-static SENSOR_DEVICE_ATTR(freq1_input, 0444, nv_hwmon_freq_show, NULL,
+static SENSOR_DEVICE_ATTR(freq1_input, 0444, nv_hwmon_value_show, NULL,
                           NV_HWMON_SENSOR_CLOCK_GRAPHICS);
 static SENSOR_DEVICE_ATTR(freq1_label, 0444, nv_hwmon_freq_label_show, NULL,
                           NV_HWMON_SENSOR_CLOCK_GRAPHICS);
-static SENSOR_DEVICE_ATTR(freq2_input, 0444, nv_hwmon_freq_show, NULL,
+static SENSOR_DEVICE_ATTR(freq2_input, 0444, nv_hwmon_value_show, NULL,
                           NV_HWMON_SENSOR_CLOCK_MEMORY);
 static SENSOR_DEVICE_ATTR(freq2_label, 0444, nv_hwmon_freq_label_show, NULL,
                           NV_HWMON_SENSOR_CLOCK_MEMORY);
+static SENSOR_DEVICE_ATTR(gpu_busy_percent, 0444, nv_hwmon_value_show, NULL,
+                          NV_HWMON_SENSOR_GPU_BUSY);
+static SENSOR_DEVICE_ATTR(mem_busy_percent, 0444, nv_hwmon_value_show, NULL,
+                          NV_HWMON_SENSOR_MEM_BUSY);
+static SENSOR_DEVICE_ATTR(mem_info_vram_total, 0444, nv_hwmon_value_show, NULL,
+                          NV_HWMON_SENSOR_VRAM_TOTAL);
+static SENSOR_DEVICE_ATTR(mem_info_vram_used, 0444, nv_hwmon_value_show, NULL,
+                          NV_HWMON_SENSOR_VRAM_USED);
 
 static struct attribute *nv_hwmon_attrs[] = {
     &sensor_dev_attr_freq1_input.dev_attr.attr,
     &sensor_dev_attr_freq1_label.dev_attr.attr,
     &sensor_dev_attr_freq2_input.dev_attr.attr,
     &sensor_dev_attr_freq2_label.dev_attr.attr,
+    &sensor_dev_attr_gpu_busy_percent.dev_attr.attr,
+    &sensor_dev_attr_mem_busy_percent.dev_attr.attr,
+    &sensor_dev_attr_mem_info_vram_total.dev_attr.attr,
+    &sensor_dev_attr_mem_info_vram_used.dev_attr.attr,
     NULL
 };
 
