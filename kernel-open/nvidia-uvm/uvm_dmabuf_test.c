@@ -285,7 +285,7 @@ NV_STATUS uvm_test_revoke_dma_buf(UVM_TEST_REVOKE_DMA_BUF_PARAMS *params,
     // but in UVM's use case all GMMU mappings will be withdrawn and any
     // further access should produce a fatal fault.
     dma_resv_lock(dmabuf->resv, NULL);
-#if defined(NV_DMA_BUF_ATTACH_OPS_HAS_INVALIDATE_MAPPINGS)
+#if defined(NV_DMA_BUF_INVALIDATE_MAPPINGS_PRESENT)
     dma_buf_invalidate_mappings(dmabuf);
 #else
     dma_buf_move_notify(dmabuf);

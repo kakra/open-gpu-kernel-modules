@@ -2565,6 +2565,21 @@ compile_test() {
             fi
         ;;
 
+        dma_buf_invalidate_mappings)
+            #
+            # Determine if the dma_buf_invalidate_mappings() function is
+            # present. It replaces dma_buf_move_notify(), and some kernels
+            # rename the function without renaming the
+            # dma_buf_attach_ops::move_notify() callback.
+            #
+            CODE="
+            #include <linux/dma-buf.h>
+            void conftest_dma_buf_invalidate_mappings(void) {
+                dma_buf_invalidate_mappings();
+            }"
+            compile_check_conftest "$CODE" "NV_DMA_BUF_INVALIDATE_MAPPINGS_PRESENT" "" "functions"
+        ;;
+
         drm_fb_create_takes_format_info)
             #
             # Determine if a `struct drm_format_info *` is passed into
