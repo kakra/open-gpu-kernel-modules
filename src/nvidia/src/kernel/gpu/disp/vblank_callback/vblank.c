@@ -44,6 +44,7 @@ kheadAddVblankCallback_IMPL
     VBLANKCALLBACK  *pList   = NULL;
     NvU32            Count;
     NvBool           vblankIntrIsBeingGenerated = NV_FALSE;
+    KernelDisplay   *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
 
     //
     // If callback needs vblank safety, make it low-latency, persistent and promote-to-front.
@@ -89,6 +90,17 @@ kheadAddVblankCallback_IMPL
 
     if ( vblankIntrIsBeingGenerated || (pCallback->Flags & VBLANK_CALLBACK_FLAG_PERSISTENT) )
     {
+        //
+        // The low latency list is also processed from the display interrupt
+        // without the GPU lock (DISP stays unblocked with intr mask locking),
+        // which holds the low latency lock. Link under it.
+        //
+        kdispAcquireLowLatencyLock(&pKernelDisplay->lowLatencyLock);
+
+        pList = (pCallback->Flags & VBLANK_CALLBACK_FLAG_LOW_LATENCY) ?
+                    pKernelHead->Vblank.Callback.pListLL :
+                    pKernelHead->Vblank.Callback.pListNL;
+
         pCheck = pList;
 
         //
@@ -205,6 +217,8 @@ kheadAddVblankCallback_IMPL
             NV_PRINTF(LEVEL_INFO,
                       "VBlankCallback discarded in dacCRTCAddVblankCallback to avoid infinite loop\n");
         }
+
+        kdispReleaseLowLatencyLock(&pKernelDisplay->lowLatencyLock);
     }
     else
     {
@@ -309,7 +323,9 @@ kheadDeleteVblankCallback_IMPL
 {
     VBLANKCALLBACK  *pList   = NULL;
     NvBool           enabled = NV_FALSE;
+    NvBool           bFound  = NV_FALSE;
     NvU32            Count;
+    KernelDisplay   *pKernelDisplay = GPU_GET_KERNEL_DISPLAY(pGpu);
 
     // Cache the requested queue and its current vblank count
     if (pCallback->Flags & VBLANK_CALLBACK_FLAG_LOW_LATENCY)
@@ -331,12 +347,21 @@ kheadDeleteVblankCallback_IMPL
         kheadWriteVblankIntrState(pGpu, pKernelHead, NV_HEAD_VBLANK_INTR_AVAILABLE);
     }
 
-    // Search the list and remove this Callback entry
+    //
+    // Search the list and remove this Callback entry. The low latency list is
+    // also processed from the display interrupt without the GPU lock, which
+    // holds the low latency lock; unlink under it and run the completion
+    // callback only afterwards.
+    //
+    kdispAcquireLowLatencyLock(&pKernelDisplay->lowLatencyLock);
+
+    pList = (pCallback->Flags & VBLANK_CALLBACK_FLAG_LOW_LATENCY) ?
+                pKernelHead->Vblank.Callback.pListLL :
+                pKernelHead->Vblank.Callback.pListNL;
+
     if (pList == pCallback)
     {
-        //
-        // Found it.
-        // Unlink it now. If we call it, it may try to add itself again, and wont be able to.
+        // Found it. Unlink it now; if we call it, it may try to add itself again.
         if (pCallback->Flags & VBLANK_CALLBACK_FLAG_LOW_LATENCY)
         {
             pKernelHead->Vblank.Callback.pListLL = pCallback->Next;
@@ -345,35 +370,7 @@ kheadDeleteVblankCallback_IMPL
         {
             pKernelHead->Vblank.Callback.pListNL = pCallback->Next;
         }
-
-        //
-        // Should the callback be executed as part of the object destroy?
-        // (safe to do, since we already hold the necessary lock).
-        //
-        if ( (pCallback->Proc) &&
-             (pCallback->Flags & VBLANK_CALLBACK_FLAG_COMPLETE_ON_OBJECT_CLEANUP) )
-        {
-            // Force it to appear to be on the correct VBlankCount
-            pCallback->VBlankCount = Count;
-
-            // This is a user call back, they don't get a pointer to our pDev or Object data structs.
-            if (pCallback->Flags & VBLANK_CALLBACK_FLAG_USER)
-            {
-                pCallback->Proc(NULL,
-                                NULL,
-                                pCallback->Param1,
-                                pCallback->Param2,
-                                pCallback->Status);
-            }
-            else
-            {
-                pCallback->Proc(pGpu,
-                                pCallback->pObject,
-                                pCallback->Param1,
-                                pCallback->Param2,
-                                pCallback->Status);
-            }
-        }
+        bFound = NV_TRUE;
     }
     else
     {
@@ -383,43 +380,46 @@ kheadDeleteVblankCallback_IMPL
         {
             if (pPrev->Next == pCallback)
             {
-                //
-                // Found it.
-                // Should the callback be executed as part of the object destroy?
-                // (safe to do, since we already hold the necessary lock).
-                //
-                if ( (pCallback->Proc) &&
-                     (pCallback->Flags & VBLANK_CALLBACK_FLAG_COMPLETE_ON_OBJECT_CLEANUP) )
-                {
-                    // Force it to appear to be on the correct VBlankCount
-                    pCallback->VBlankCount = Count;
-
-                    // This is a user call back, they don't get a pointer to our pDev or Object data structs.
-                    if (pCallback->Flags & VBLANK_CALLBACK_FLAG_USER)
-                    {
-                        pCallback->Proc(NULL,
-                                        NULL,
-                                        pCallback->Param1,
-                                        pCallback->Param2,
-                                        pCallback->Status);
-                    }
-                    else
-                    {
-                        pCallback->Proc(pGpu,
-                                        pCallback->pObject,
-                                        pCallback->Param1,
-                                        pCallback->Param2,
-                                        pCallback->Status);
-                    }
-                }
-
                 pPrev->Next = pCallback->Next;
+                bFound = NV_TRUE;
                 break;
             }
             pPrev = pPrev->Next;
         }
     }
     pCallback->Next = NULL;
+
+    kdispReleaseLowLatencyLock(&pKernelDisplay->lowLatencyLock);
+
+    //
+    // Should the callback be executed as part of the object destroy?
+    // (safe to do, since we already hold the necessary lock).
+    //
+    if (bFound &&
+        (pCallback->Proc) &&
+        (pCallback->Flags & VBLANK_CALLBACK_FLAG_COMPLETE_ON_OBJECT_CLEANUP))
+    {
+        // Force it to appear to be on the correct VBlankCount
+        pCallback->VBlankCount = Count;
+
+        // This is a user call back, they don't get a pointer to our pDev or Object data structs.
+        if (pCallback->Flags & VBLANK_CALLBACK_FLAG_USER)
+        {
+            pCallback->Proc(NULL,
+                            NULL,
+                            pCallback->Param1,
+                            pCallback->Param2,
+                            pCallback->Status);
+        }
+        else
+        {
+            pCallback->Proc(pGpu,
+                            pCallback->pObject,
+                            pCallback->Param1,
+                            pCallback->Param2,
+                            pCallback->Status);
+        }
+    }
 
     // Check to see if there are no callbacks scheduled for this head
     if (!(pKernelHead->Vblank.Callback.pListLL) &&

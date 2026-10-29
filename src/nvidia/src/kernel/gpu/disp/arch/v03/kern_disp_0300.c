@@ -653,9 +653,8 @@ _kdispHandleAwakenChnMask
     NvBool            bEventFound  = NV_FALSE;
     NV_STATUS         status       = NV_OK;
     NvU32             channelNum   = 0;
-    RsClient         *pClient;
-    NvHandle          hChannel;
     NvBool            bInUse;
+    DispChannel      *pChannel;
 
     _kdispResetAwakenChannelNumMask(pGpu, pKernelDisplay, channelNumMask, channelClass, pThreadState);
 
@@ -677,19 +676,27 @@ _kdispHandleAwakenChnMask
         }
 
         NV_ASSERT_OR_RETURN_VOID(pKernelDisplay->pClientChannelTable != NULL);
+        //
+        // This runs from the display interrupt without the GPU lock, holding
+        // the low latency lock, under which the table entry is set and cleared;
+        // the channel stays alive while it is in the table. Don't look it up
+        // in the client's resource map, which can change without the client
+        // lock.
+        //
         bInUse = pKernelDisplay->pClientChannelTable[channelNum].bInUse;
-        pClient = pKernelDisplay->pClientChannelTable[channelNum].pClient;
-        hChannel = pKernelDisplay->pClientChannelTable[channelNum].hChannel;
+        pChannel = pKernelDisplay->pClientChannelTable[channelNum].pDispChannel;
 
         // OK, we've got this interrupt, lets see if we have a SW channel ready for it.
         if (bInUse)
         {
-            DispChannel *pChannel;
-
-            if (dispchnGetByHandle(pClient, hChannel, &pChannel) == NV_OK)
+            if (pChannel != NULL)
             {
-                PEVENTNOTIFICATION pEventNotifications = inotifyGetNotificationList(staticCast(pChannel, INotifier));
+                PEVENTNOTIFICATION pEventNotifications;
                 bEventFound = NV_TRUE;
+
+                // Event list nodes are linked/unlinked under the share map lock
+                portSyncSpinlockAcquire(g_resServ.pShareMapLock);
+                pEventNotifications = inotifyGetNotificationList(staticCast(pChannel, INotifier));
 
                 //
                 // Assuming that caller must always use 0 as the index.
@@ -697,6 +704,7 @@ _kdispHandleAwakenChnMask
                 // to send any real method data here anyway.
                 //
                 notifyEvents(pGpu, pEventNotifications, 0, 0, 0, NV_OK, NV_OS_WRITE_THEN_AWAKEN);
+                portSyncSpinlockRelease(g_resServ.pShareMapLock);
             }
         }
 
