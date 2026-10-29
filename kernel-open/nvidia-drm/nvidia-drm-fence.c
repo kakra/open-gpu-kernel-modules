@@ -1234,6 +1234,16 @@ struct nv_drm_semsurf_fence_ctx {
      * latter. Zero if no callback is currently needed.
      */
     NvU64 current_wait_value;
+
+    /*
+     * Number of registered RM/NVKMS callbacks that may still run, including
+     * ones being registered. The semaphore surface calls a waiter after
+     * detaching it, outside of its lock, so freeing the semaphore surface does
+     * not wait for a callback that is already being delivered. A callback
+     * drops its count as its last access to the context; the destructor waits
+     * for this to reach zero before freeing the context.
+     */
+    atomic_t outstanding_callbacks;
 };
 
 static inline struct nv_drm_semsurf_fence_ctx*
@@ -1331,6 +1341,17 @@ __nv_drm_semsurf_force_complete_pending(struct nv_drm_semsurf_fence_ctx *ctx)
 /* Forward declaration */
 static void
 __nv_drm_semsurf_ctx_reg_callbacks(struct nv_drm_semsurf_fence_ctx *ctx);
+
+/*
+ * Drops the count of a callback that will not run (again). Must be the last
+ * access to ctx by a running callback.
+ */
+static inline void
+__nv_drm_semsurf_ctx_callback_done(struct nv_drm_semsurf_fence_ctx *ctx)
+{
+    smp_mb__before_atomic();
+    atomic_dec(&ctx->outstanding_callbacks);
+}
 
 static void
 __nv_drm_semsurf_ctx_fence_callback_work(void *data)
@@ -1481,6 +1502,12 @@ __nv_drm_semsurf_ctx_callback(void *data)
          */
         nv_drm_free(callback);
     }
+
+    /*
+     * Any work queued above is flushed by the destructor's workthread
+     * shutdown. Don't touch ctx after this.
+     */
+    __nv_drm_semsurf_ctx_callback_done(ctx);
 }
 
 /*
@@ -1525,6 +1552,7 @@ __nv_drm_semsurf_ctx_store_callback(
              * resources have been freed. Free its local tracking data.
              */
             nv_drm_free(oldCallback);
+            __nv_drm_semsurf_ctx_callback_done(ctx);
         } else {
             /*
              * The new callback is already running. It will do no harm, and free
@@ -1590,7 +1618,11 @@ __nv_drm_semsurf_ctx_reg_callbacks(struct nv_drm_semsurf_fence_ctx *ctx)
          * than newWaitValue if new fences have been created tracking lower
          * values than the previously lowest pending one. Hence, even if this
          * registration succeeds, the callback may be discarded
+         *
+         * Count the callback before registering it, it can run before
+         * registerSemaphoreSurfaceCallback() returns.
          */
+        atomic_inc(&ctx->outstanding_callbacks);
         kapiRet =
             nvKms->registerSemaphoreSurfaceCallback(nv_dev->pDevice,
                                                     ctx->pSemSurface,
@@ -1600,6 +1632,11 @@ __nv_drm_semsurf_ctx_reg_callbacks(struct nv_drm_semsurf_fence_ctx *ctx)
                                                     newWaitValue,
                                                     0,
                                                     &newNvKmsCallback);
+
+        if (kapiRet != NVKMS_KAPI_REG_WAITER_SUCCESS) {
+            /* Nothing was registered */
+            __nv_drm_semsurf_ctx_callback_done(ctx);
+        }
     } while (kapiRet == NVKMS_KAPI_REG_WAITER_ALREADY_SIGNALLED);
 
     /* Can't deref newCallback at this point unless kapiRet indicates failure */
@@ -1656,6 +1693,7 @@ __nv_drm_semsurf_ctx_reg_callbacks(struct nv_drm_semsurf_fence_ctx *ctx)
                                                       newNvKmsCallback)) {
             /* RM callback successfully canceled. Free local tracking data */
             nv_drm_free(newCallback);
+            __nv_drm_semsurf_ctx_callback_done(ctx);
         }
     }
 }
@@ -1667,7 +1705,9 @@ static void __nv_drm_semsurf_fence_ctx_destroy(
     struct nv_drm_semsurf_fence_ctx *ctx =
         to_semsurf_fence_ctx(nv_fence_context);
     struct NvKmsKapiSemaphoreSurfaceCallback *pendingNvKmsCallback;
+    struct nv_drm_semsurf_fence_callback *pendingCallback;
     NvU64 pendingWaitValue;
+    unsigned long waitTimeout;
     unsigned long flags;
 
     /*
@@ -1689,27 +1729,61 @@ static void __nv_drm_semsurf_fence_ctx_destroy(
      */
     spin_lock_irqsave(&ctx->lock, flags);
     pendingNvKmsCallback = ctx->callback.nvKms;
-    pendingWaitValue = ctx->callback.local ?
-        ctx->callback.local->wait_value : 0;
+    pendingCallback = ctx->callback.local;
+    pendingWaitValue = pendingCallback ? pendingCallback->wait_value : 0;
     spin_unlock_irqrestore(&ctx->lock, flags);
 
     if (pendingNvKmsCallback) {
         WARN_ON(pendingWaitValue == 0);
-        nvKms->unregisterSemaphoreSurfaceCallback(nv_dev->pDevice,
-                                                  ctx->pSemSurface,
-                                                  ctx->base.fenceSemIndex,
-                                                  pendingWaitValue,
-                                                  pendingNvKmsCallback);
+        if (nvKms->unregisterSemaphoreSurfaceCallback(nv_dev->pDevice,
+                                                      ctx->pSemSurface,
+                                                      ctx->base.fenceSemIndex,
+                                                      pendingWaitValue,
+                                                      pendingNvKmsCallback)) {
+            /* Canceled, it will never run. Free its local tracking data. */
+            ctx->callback.local = NULL;
+            ctx->callback.nvKms = NULL;
+            nv_drm_free(pendingCallback);
+            __nv_drm_semsurf_ctx_callback_done(ctx);
+        }
+        /*
+         * Otherwise the callback is running or about to run. It clears
+         * ctx->callback and frees its own data, so leave both alone.
+         */
     }
 
     nvKms->freeSemaphoreSurface(nv_dev->pDevice, ctx->pSemSurface);
 
     /*
-     * Now that the semaphore surface, the timer, and the workthread are gone:
+     * Freeing the semaphore surface removes this instance's waiters that were
+     * not notified yet, but the semaphore surface may be shared with other
+     * clients, and a callback it already detached for delivery can still be
+     * running (from the nonstall interrupt path or another thread's SET_VALUE).
+     * Wait for those to finish touching the context.
      *
-     * -No more RM/NVKMS callbacks will arrive, nor are any in progress. Freeing
-     *  the semaphore surface cancels all its callbacks associated with this
-     *  instance of it, and idles any pending callbacks.
+     * This relies on a failed unregister meaning the callback is being
+     * delivered. Should that ever not hold (e.g. the GPU fell off the bus),
+     * the semaphore surface deleted the waiter without calling it; leak the
+     * context rather than hang here forever.
+     */
+    waitTimeout = nv_drm_timeout_from_ms(5000);
+    while (atomic_read(&ctx->outstanding_callbacks) != 0) {
+        if (time_after_eq(nv_drm_timer_now(), waitTimeout)) {
+            NV_DRM_DEV_LOG_ERR(
+                nv_dev,
+                "Semaphore surface fence callbacks did not finish, leaking the fence context");
+            __nv_drm_semsurf_force_complete_pending(ctx);
+            return;
+        }
+        nv_drm_yield();
+    }
+    smp_mb();
+
+    /*
+     * Now that the semaphore surface, the timer, and the workthread are gone
+     * and no callbacks are in flight:
+     *
+     * -No more RM/NVKMS callbacks will arrive, nor are any in progress.
      *
      * -No more timer callbacks will arrive, nor are any in flight.
      *
@@ -1720,11 +1794,7 @@ static void __nv_drm_semsurf_fence_ctx_destroy(
      * fence context's data will happen from here on out.
      */
 
-    if (ctx->callback.local) {
-        nv_drm_free(ctx->callback.local);
-        ctx->callback.local = NULL;
-        ctx->callback.nvKms = NULL;
-    }
+    WARN_ON(ctx->callback.local != NULL);
 
     __nv_drm_semsurf_force_complete_pending(ctx);
 
@@ -1825,6 +1895,7 @@ __nv_drm_semsurf_fence_ctx_new(
     ctx->current_wait_value = 0;
 
     spin_lock_init(&ctx->lock);
+    atomic_set(&ctx->outstanding_callbacks, 0);
     INIT_LIST_HEAD(&ctx->pending_fences);
     INIT_LIST_HEAD(&ctx->pending_waits);
 
