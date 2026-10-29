@@ -5921,8 +5921,35 @@ void nvRmRegisterBacklight(NVDispEvoRec *pDispEvo)
         return;
     }
 
+    /*
+     * On laptops with a mux switched to the integrated GPU, the internal
+     * panel is listed but not connected to this GPU: setting its "backlight"
+     * does nothing, but resumes the GPU from RTD3. Skip internal displays
+     * that aren't connected, unless a dynamic mux can switch them to this
+     * GPU later.
+     *
+     * This is only decided once: the core channel is also reallocated on
+     * resume and console restore, when an eDP panel that is powered off
+     * may not be reported as connected.
+     */
+    if (!pDispEvo->backlightDisplayMaskValid) {
+        const NVDpyIdList internalDpys =
+            nvNvU32ToDpyIdList(dispParams.availableInternalDisplaysMask);
+        const NVDpyIdList connectedDpys =
+            nvRmGetConnectedDpys(pDispEvo, internalDpys);
+        const NVDpyIdList muxDpys =
+            nvIntersectDpyIdListAndDpyIdList(GetValidMuxDpys(pDispEvo),
+                                             internalDpys);
+
+        pDispEvo->backlightDisplayMask =
+            nvDpyIdListToNvU32(nvAddDpyIdListToDpyIdList(connectedDpys,
+                                                         muxDpys));
+        pDispEvo->backlightDisplayMaskValid = TRUE;
+    }
+
     /* Find a display with a backlight */
-    displayMask = dispParams.availableInternalDisplaysMask;
+    displayMask = dispParams.availableInternalDisplaysMask &
+                  pDispEvo->backlightDisplayMask;
     for (; displayMask; displayMask &= ~LOWESTBIT(displayMask))
     {
         NV0073_CTRL_SPECIFIC_BACKLIGHT_BRIGHTNESS_PARAMS params = { 0 };

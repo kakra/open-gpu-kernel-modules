@@ -2195,6 +2195,13 @@ typedef struct _NVDispEvoRec {
     struct nvkms_backlight_device *backlightDevice;
 
     /*
+     * Internal displays that a backlight may be registered for, determined
+     * by the first nvRmRegisterBacklight() call; see there.
+     */
+    NvU32 backlightDisplayMask;
+    NvBool backlightDisplayMaskValid;
+
+    /*
      * Per-API-head RG semaphore callback lists for vblank interrupts with
      * precise timestamp tracking. This uses RG (Raster Generator) semaphore
      * which provides deterministic, regular interrupt positioning within each
