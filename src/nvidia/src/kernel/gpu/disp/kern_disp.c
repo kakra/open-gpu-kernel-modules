@@ -1530,16 +1530,27 @@ kdispRegisterRgLineCallback_IMPL
     NV_ASSERT_OR_RETURN(rgIntrLine < MAX_RG_LINE_CALLBACKS_PER_HEAD, NV_ERR_INVALID_ARGUMENT);
 
     RgLineCallback **slot = &pKernelDisplay->rgLineCallbackPerHead[head][rgIntrLine];
+    NvBool bUpdated = NV_FALSE;
 
+    //
+    // kdispInvokeRgLineCallback() runs from the display interrupt without the
+    // GPU lock, holding the low latency lock, and the RgLineCallback is freed
+    // right after unregistering. Update the slot under the same lock.
+    //
+    kdispAcquireLowLatencyLock(&pKernelDisplay->lowLatencyLock);
     if (bEnable && *slot == NULL)
     {
         *slot = pRgLineCallback;
+        bUpdated = NV_TRUE;
     }
     else if (!bEnable && *slot == pRgLineCallback)
     {
         *slot = NULL;
+        bUpdated = NV_TRUE;
     }
-    else
+    kdispReleaseLowLatencyLock(&pKernelDisplay->lowLatencyLock);
+
+    if (!bUpdated)
     {
         //
         // OBJDISP is the authority for *allocating* these "slots";

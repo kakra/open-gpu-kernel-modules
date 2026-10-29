@@ -263,9 +263,16 @@ dispchnConstruct_IMPL
             goto done;
         }
 
+        //
+        // _kdispHandleAwakenChnMask() uses this entry from the display
+        // interrupt without the GPU lock, holding the low latency lock.
+        //
+        kdispAcquireLowLatencyLock(&pKernelDisplay->lowLatencyLock);
         pKernelDisplay->pClientChannelTable[dispChannelNum].pClient = pClient;
         pKernelDisplay->pClientChannelTable[dispChannelNum].hChannel = hChannel;
+        pKernelDisplay->pClientChannelTable[dispChannelNum].pDispChannel = pDispChannel;
         pKernelDisplay->pClientChannelTable[dispChannelNum].bInUse = NV_TRUE;
+        kdispReleaseLowLatencyLock(&pKernelDisplay->lowLatencyLock);
          
         NV_PRINTF(LEVEL_INFO, "Mapped hclient: %p hchannel: 0x%x channleNum: 0x%x\n",
                                 pClient, hChannel, dispChannelNum);
@@ -584,9 +591,13 @@ dispchnDestruct_IMPL
         rmStatus = kdispGetChannelNum_HAL(pKernelDisplay, pDispChannel->DispClass, pDispChannel->InstanceNumber, &dispChannelNum);
         if (rmStatus == NV_OK)
         {
+            // See dispchnConstruct; the awaken interrupt is done with the channel after this
+            kdispAcquireLowLatencyLock(&pKernelDisplay->lowLatencyLock);
             pKernelDisplay->pClientChannelTable[dispChannelNum].pClient = NULL;
             pKernelDisplay->pClientChannelTable[dispChannelNum].hChannel = 0;
+            pKernelDisplay->pClientChannelTable[dispChannelNum].pDispChannel = NULL;
             pKernelDisplay->pClientChannelTable[dispChannelNum].bInUse = NV_FALSE;
+            kdispReleaseLowLatencyLock(&pKernelDisplay->lowLatencyLock);
         }
         else
         {
