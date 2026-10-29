@@ -97,11 +97,16 @@ typedef struct MemoryMapper MemoryMapper;
 
 // MemoryMapper can't wait for workers to finish in destructor due to locking constraints
 // Instead set pMemoryMapper to NULL and leave the params structure until all workers are done
+// The semaphore surface waiter callback lives here too: it runs without RM locks and can be
+// delivered after the MemoryMapper is destroyed. Every queued worker and every registered
+// waiter holds a reference.
 typedef struct
 {
     struct MemoryMapper *pMemoryMapper;
     NvU32         numRefs;
-    PORT_RWLOCK  *pLock; 
+    PORT_RWLOCK  *pLock;
+    struct OBJGPU *pGpu;
+    NVOS10_EVENT_KERNEL_CALLBACK_EX semaphoreCallback;
 } MemoryMapperWorkerParams;
 
 /*!
@@ -157,7 +162,6 @@ struct MemoryMapper {
     NvHandle hInternalDevice;
     NvHandle hInternalSubdevice;
     NvHandle hInternalSemaphoreSurface;
-    NVOS10_EVENT_KERNEL_CALLBACK_EX semaphoreCallback;
     MemoryMapperWorkerParams *pWorkerParams;
     struct SemaphoreSurface *pSemSurf;
     NvBool bError;
