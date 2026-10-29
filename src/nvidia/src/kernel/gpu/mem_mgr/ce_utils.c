@@ -440,6 +440,17 @@ ceutilsDestruct_IMPL
     // make sure no new work was queued from callbacks
     NV_ASSERT(pCeUtils->lastCompletedPayload == lastSubmittedPayload);
 
+    //
+    // The completion callback runs from the nonstall interrupt path for any
+    // channel's FIFO_EVENT_MTHD, without locks, and reads the finish payload
+    // semaphore. Free its event before tearing down the channel mappings
+    // below; freeing a nonstall event waits for notifications in flight.
+    //
+    if (pCeUtils->bCompletionCallbackEnabled)
+    {
+        NV_ASSERT_OK(pRmApi->Free(pRmApi, pChannel->hClient, pChannel->eventId));
+    }
+
     if ((pChannel->bClientUserd) && (pChannel->pControlGPFifo != NULL))
     {
         if (kbusIsBarAccessBlocked(GPU_GET_KERNEL_BUS(pGpu)))
