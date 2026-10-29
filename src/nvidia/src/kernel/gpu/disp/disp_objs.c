@@ -118,6 +118,21 @@ dispapiDestruct_IMPL
 )
 {
     NvU32 i;
+    NotifShare *pNotifierShare =
+        inotifyGetNotificationShare(staticCast(pDisplayApi, INotifier));
+
+    //
+    // kdispNotifyEvent() can run from the display interrupt without the GPU
+    // lock and uses pNotifyActions of any notifier it finds in the share map.
+    // Detach this notifier under the share map lock before freeing them; the
+    // base Notifier destructor only does that after this destructor ran.
+    //
+    if (pNotifierShare != NULL)
+    {
+        portSyncSpinlockAcquire(g_resServ.pShareMapLock);
+        pNotifierShare->pNotifier = NULL;
+        portSyncSpinlockRelease(g_resServ.pShareMapLock);
+    }
 
     // Free notify actions memory if it's been allocated
     for (i = 0; i < NV2080_MAX_SUBDEVICES; i++)
