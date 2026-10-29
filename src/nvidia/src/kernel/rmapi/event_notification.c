@@ -851,8 +851,14 @@ static NV_STATUS _insertEventNotification
     // Now insert the event into the event chain of this object.
     // Order doesn't really matter.
     //
+    // kdispNotifyEvent() walks display notifier event lists from the display
+    // interrupt without the GPU lock, under the share map lock; link and
+    // unlink under it as well.
+    //
+    portSyncSpinlockAcquire(g_resServ.pShareMapLock);
     EventNotify->Next = *ppEventNotification;
     *ppEventNotification = EventNotify;
+    portSyncSpinlockRelease(g_resServ.pShareMapLock);
 
     return (NV_OK);
 }
@@ -976,6 +982,9 @@ static NV_STATUS _removeEventNotification
     // check for null list
     nextEvent = NULL;
 
+    // See _insertEventNotification()
+    portSyncSpinlockAcquire(g_resServ.pShareMapLock);
+
     if (*ppEventNotification != NULL)
     {
         // check for head of list
@@ -1006,6 +1015,8 @@ static NV_STATUS _removeEventNotification
             }
         }
     }
+
+    portSyncSpinlockRelease(g_resServ.pShareMapLock);
 
     // delete the event if it was found
     if (found)
@@ -1169,7 +1180,10 @@ void notifyDestruct_IMPL(Notifier* pNotifier)
     NotifShare *pNotifierShare = inotifyGetNotificationShare(staticCast(pNotifier, INotifier));
     if (pNotifierShare != NULL)
     {
+        // kdispNotifyEvent() reads pNotifier under the share map lock
+        portSyncSpinlockAcquire(g_resServ.pShareMapLock);
         pNotifierShare->pNotifier = NULL;
+        portSyncSpinlockRelease(g_resServ.pShareMapLock);
         serverFreeShare(&g_resServ, staticCast(pNotifierShare, RsShared));
     }
 }
