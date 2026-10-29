@@ -68,6 +68,7 @@ struct EVENTNOTIFICATION
     NvU32               SubdeviceSpecificValue;   // NV0005_NOTIFY_INDEX_SUBDEVICE
     NvBool              bEventDataRequired;       // nv_post_event allocates memory for Data.
     NvBool              bNonStallIntrEvent;
+    struct GpuEngineEventNotificationList *pNonStallIntrEventList; // Engine list a non-stall event is on.
     NvU32               NotifyTriggerCount;       // Used with bBroadcastEvent.
     NvP64               Data;
     OBJGPU             *pGpu;                     // Store to free dynamic memory on teardown.
