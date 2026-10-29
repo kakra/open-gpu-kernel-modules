@@ -1311,7 +1311,11 @@ struct nv_pci_tegra_devfreq_dev;
 /* this is a general os-specific state structure. the first element *must* be
    the general state structure, for the generic unix-based code */
 
-#if defined(NV_CXL_CXL_H_PRESENT)
+/*
+ * Some kernels have <cxl/cxl.h> without struct cxl_dev_state; nv_cxl is only
+ * used when the CXL bring-up API is available.
+ */
+#if defined(NV_CXL_INIT_SUPPORTED)
 struct nv_cxl {
     struct cxl_dev_state         cxlds;
     struct cxl_memdev           *cxlmd;
