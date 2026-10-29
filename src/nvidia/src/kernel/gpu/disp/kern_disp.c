@@ -1108,7 +1108,19 @@ kdispNotifyEvent_IMPL
     NvU32             *pNotifyActions;
     NvU32              disableCmd, singleCmd;
     NvU32              subDeviceInst;
-    RS_SHARE_ITERATOR  it = serverutilShareIter(classId(NotifShare));
+    RS_SHARE_ITERATOR  it;
+
+    //
+    // This also runs from the display interrupt without the GPU lock (DISP
+    // stays unblocked while the GPU lock is held with intr mask locking), so
+    // shares, notifiers and their event lists can change underneath it. Hold
+    // the share map lock for the walk: share insert/remove, event list
+    // link/unlink and notifier detach take it as well. Event callbacks run
+    // under it and must not alloc/free shares or (un)register events.
+    //
+    portSyncSpinlockAcquire(g_resServ.pShareMapLock);
+
+    it = serverutilShareIter(classId(NotifShare));
 
     // search notifiers with events hooked up for this gpu
     while (serverutilShareIterNext(&it))
@@ -1174,6 +1186,8 @@ kdispNotifyEvent_IMPL
             pNotifyActions[notifyIndex] = disableCmd;
         }
     }
+
+    portSyncSpinlockRelease(g_resServ.pShareMapLock);
 }
 
 void kdispAcquireLowLatencyLock(PORT_ATOMIC NvS32 * pLowLatencyLock)
