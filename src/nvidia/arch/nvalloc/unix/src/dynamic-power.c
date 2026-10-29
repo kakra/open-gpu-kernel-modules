@@ -2380,6 +2380,7 @@ RmPowerManagement(
                         //
                         RmPowerSourceChangeEvent(nv, !ac_plugged);
                     }
+                    RmApplyPendingDNotifierState(nv);
                     RmRequestDNotifierState(nv);
                 }
                 break;
