@@ -3324,23 +3324,7 @@ void ConnectorImpl::fireEventsInternal()
             NV_DPTRACE_WARNING(LOST_DEVICE, dev->address.size(), addrBuffer[0], addrBuffer[1],
                                    addrBuffer[2], addrBuffer[3]);
             sink->lostDevice(dev);
-#if defined(DEBUG)
-            // Assert that this device is not contained in any groups.
-            List* groupLists[] = {
-                &activeGroups,
-                &inactiveGroups
-            };
-
-            for (unsigned i = 0; i < sizeof(groupLists) / sizeof(groupLists[0]); i++)
-            {
-                List *groupList = groupLists[i];
-                for (ListElement *e = groupList->begin(); e != groupList->end(); e = e->next)
-                {
-                    GroupImpl *g = (GroupImpl *)e;
-                    DP_ASSERT(!g->contains(dev));
-                }
-            }
-#endif
+            removeLostDeviceFromGroups(dev);
             // Remove device from dscEnabledDevices list before deletion to prevent dangling pointer
             if (dscEnabledDevices.contains(dev))
             {
@@ -4107,6 +4091,48 @@ void ConnectorImpl::restoreDscOnReappearedDevice(DeviceImpl * dev)
             disableFlush();
         }
     }
+}
+
+//
+// The client removes a lost device from its group in lostDevice(), but only
+// from the group of an attached head (Device::getOwningGroup()), and not at
+// all if it doesn't know the device. Don't leave the device in any group when
+// it is freed: a later modeset or VRR change on that group would enumerate
+// the freed device.
+//
+void ConnectorImpl::removeLostDeviceFromGroups(DeviceImpl * dev)
+{
+    List * groupLists[] = {
+        &activeGroups,
+        &inactiveGroups
+    };
+
+    for (unsigned i = 0; i < sizeof(groupLists) / sizeof(groupLists[0]); i++)
+    {
+        List * groupList = groupLists[i];
+
+        for (ListElement * e = groupList->begin(); e != groupList->end(); e = e->next)
+        {
+            GroupImpl * g = (GroupImpl *)e;
+
+            if (!g->contains(dev))
+                continue;
+
+            DP_PRINTF(DP_WARNING, "DPCONN> Removing lost device from a group the client left it in");
+
+            if (g->headInFirmware)
+            {
+                // GroupImpl::remove() doesn't support firmware groups
+                g->members.remove(dev);
+            }
+            else
+            {
+                g->remove(dev);
+            }
+        }
+    }
+
+    dev->activeGroup = NULL;
 }
 
 bool ConnectorImpl::needToEnableFEC(const DpPreModesetParams &params)
