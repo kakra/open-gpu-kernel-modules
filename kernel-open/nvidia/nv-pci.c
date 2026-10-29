@@ -3089,6 +3089,8 @@ NvU8 nv_find_pci_capability(struct pci_dev *pci_dev, NvU8 capability)
 {
     u16 status = 0;
     u8  cap_ptr = 0, cap_id = 0xff;
+    /* Same bound as PCI_FIND_CAP_TTL, in case the list loops */
+    int ttl = 48;
 
     pci_read_config_word(pci_dev, PCI_STATUS, &status);
     status &= PCI_STATUS_CAP_LIST;
@@ -3110,7 +3112,7 @@ NvU8 nv_find_pci_capability(struct pci_dev *pci_dev, NvU8 capability)
         if (cap_id == capability)
             return cap_ptr;
         pci_read_config_byte(pci_dev, cap_ptr + PCI_CAP_LIST_NEXT, &cap_ptr);
-    } while (cap_ptr && cap_id != 0xff);
+    } while (cap_ptr && cap_id != 0xff && --ttl > 0);
 
     return 0;
 }
