@@ -2477,7 +2477,13 @@ _pfmreqhndlrCallPshareStatus
             }
         }
 
-        if (pPfmreqhndlrData->PFMREQHNDLRACPIData.bSystemParamLimitUpdate)
+        //
+        // 4. System parameter limit update. At init, the TGPU and PPMD
+        // counters aren't set up before PSHAREPARAMS has been called, which
+        // also samples the initial PPMD limit. Like the other updates, leave
+        // it to the runtime PSHARESTATUS calls.
+        //
+        if (pPfmreqhndlrData->PFMREQHNDLRACPIData.bSystemParamLimitUpdate && !bInit)
         {
             timeStamp = _pfmreqhndlrGetTimeStamp(pPlatformRequestHandler);
             _pfmreqhndlrResetCounter(pPfmreqhndlrData, PFM_REQ_HNDLR_LIMIT(PFM_REQ_HNDLR_TGPU_SENSOR), timeStamp);
