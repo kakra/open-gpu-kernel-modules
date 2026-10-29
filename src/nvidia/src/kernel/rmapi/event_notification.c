@@ -743,6 +743,9 @@ NV_STATUS registerEventNotification
         if (rmStatus != NV_OK)
             goto free_entry;
 
+        (*ppEventNotification)->pNonStallIntrEventList =
+            pGpu->engineNonstallIntrEventNotifications[rmEngineId];
+
         return rmStatus;
     }
 
@@ -830,6 +833,7 @@ static NV_STATUS _insertEventNotification
 
     EventNotify->bNonStallIntrEvent =
         ((NotifyIndex & NV01_EVENT_NONSTALL_INTR) ?  NV_TRUE : NV_FALSE);
+    EventNotify->pNonStallIntrEventList = NULL;
 
     // strip the upper bits as they are actually flags
     NotifyIndex = DRF_VAL(0005, _NOTIFY_INDEX, _INDEX, NotifyIndex);
@@ -908,7 +912,19 @@ NV_STATUS unregisterEventNotificationWithData
     if (rmStatus != NV_OK)
         goto error;
 
-    if (pTargetEvent->bNonStallIntrEvent)
+    //
+    // Remove a non-stall event from the engine list it was inserted into.
+    // The notifier lookup below can fail while the client is torn down, and
+    // the ISR walks the engine list without locks: an event left on it after
+    // it is freed is a use-after-free in the next non-stall interrupt.
+    //
+    if (pTargetEvent->pNonStallIntrEventList != NULL)
+    {
+        _gpuEngineEventNotificationRemove(pTargetEvent->pNonStallIntrEventList,
+                                          pTargetEvent);
+        pTargetEvent->pNonStallIntrEventList = NULL;
+    }
+    else if (pTargetEvent->bNonStallIntrEvent)
     {
         //
         // For non-stall interrupt, the event parent type is NV20_SUBDEVICE, so we can locate
