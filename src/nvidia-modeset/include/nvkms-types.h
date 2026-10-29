@@ -1786,6 +1786,9 @@ typedef struct __NVDpyAttributeColorRec {
     enum NvKmsDpyAttributeColorRangeValue range;
 
     enum NvKmsOutputColorimetry colorimetry;
+
+    /* Whether nvLimitColorBpcEvo() lowered bpc to the requested limit */
+    NvBool bpcLimited;
 } NVDpyAttributeColor;
 
 typedef struct __NVAttributesSetEvoRec {
