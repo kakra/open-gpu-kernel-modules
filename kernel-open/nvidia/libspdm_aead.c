@@ -145,6 +145,19 @@ static int lkca_aead_internal(struct crypto_aead *aead,
         return -EINVAL;
     }
 
+    /*
+     * Zero-length scatterlist entries aren't allowed in the used part of an
+     * AEAD scatterlist: without associated data, the lists have to start at
+     * the text, or at the tag if there is no text either. The generic gcm
+     * template otherwise computes a wrong tag.
+     */
+    if (a_data_size == 0) {
+        int first = (data_in_size == 0) ? SG_AEAD_SIG : SG_AEAD_TEXT;
+
+        sg_in = &sg_in[first];
+        sg_out = &sg_out[first];
+    }
+
     aead_request_set_ad(req, a_data_size);
 
     aead_request_set_callback(req, CRYPTO_TFM_REQ_MAY_BACKLOG |
