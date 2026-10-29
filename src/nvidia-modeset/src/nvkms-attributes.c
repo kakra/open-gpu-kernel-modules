@@ -458,6 +458,7 @@ static void DpyPostColorFormatOrRangeSetEvo(NVDpyEvoPtr pDpyEvo)
     enum NvKmsDpyAttributeCurrentColorFormatValue colorFormat;
     enum NvKmsDpyAttributeColorBpcValue colorBpc;
     enum NvKmsDpyAttributeColorRangeValue colorRange;
+    NvBool bpcLimited;
     NVEvoUpdateState updateState = { };
     NVDispEvoRec *pDispEvo = pDpyEvo->pDispEvo;
     NVDispApiHeadStateEvoRec *pApiHeadState;
@@ -510,6 +511,7 @@ static void DpyPostColorFormatOrRangeSetEvo(NVDpyEvoPtr pDpyEvo)
 
         colorBpc = limitedDpyColor.bpc;
         colorRange = limitedDpyColor.range;
+        bpcLimited = limitedDpyColor.bpcLimited;
     }
 
     colorFormatChanged = (pApiHeadState->attributes.color.format != colorFormat);
@@ -525,6 +527,7 @@ static void DpyPostColorFormatOrRangeSetEvo(NVDpyEvoPtr pDpyEvo)
     tmpDpyColor.format = colorFormat;
     tmpDpyColor.range = colorRange;
     tmpDpyColor.bpc = colorBpc;
+    tmpDpyColor.bpcLimited = bpcLimited;
 
     if (nvDpyIsHdmiEvo(pDpyEvo) &&
             ((colorBpc > pApiHeadState->attributes.color.bpc) || 
@@ -535,6 +538,8 @@ static void DpyPostColorFormatOrRangeSetEvo(NVDpyEvoPtr pDpyEvo)
          */
         if (pApiHeadState->timings.protocol == NVKMS_PROTOCOL_SOR_HDMI_FRL) {
             tmpDpyColor.bpc = pApiHeadState->attributes.color.bpc;
+            tmpDpyColor.bpcLimited =
+                pApiHeadState->attributes.color.bpcLimited;
         } else {
             if (!nvEvoHdmiTmdsMaxPixelClockCheck(
                     pDpyEvo,
@@ -552,6 +557,7 @@ static void DpyPostColorFormatOrRangeSetEvo(NVDpyEvoPtr pDpyEvo)
     pApiHeadState->attributes.color.format = tmpDpyColor.format;
     pApiHeadState->attributes.color.range = tmpDpyColor.range;
     pApiHeadState->attributes.color.bpc = tmpDpyColor.bpc;
+    pApiHeadState->attributes.color.bpcLimited = tmpDpyColor.bpcLimited;
 
     /* Update hardware's current color format and colorRange */
     FOR_EACH_EVO_HW_HEAD_IN_MASK(pApiHeadState->hwHeadsMask, head) {
@@ -851,6 +857,13 @@ static NvBool GetContentTypeValidValues(
     pValidValues->u.range.min = NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_DEFAULT;
     pValidValues->u.range.max = NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE_GAME;
 
+    return TRUE;
+}
+
+static NvBool GetCurrentColorBpcLimited(const NVDpyEvoRec *pDpyEvo,
+                                        NvS64 *pValue)
+{
+    *pValue = pDpyEvo->currentAttributes.color.bpcLimited;
     return TRUE;
 }
 
@@ -1449,6 +1462,12 @@ static const struct {
         .get            = GetContentType,
         .getValidValues = GetContentTypeValidValues,
         .type           = NV_KMS_ATTRIBUTE_TYPE_INTEGER,
+    },
+    [NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_LIMITED] = {
+        .set            = NULL,
+        .get            = GetCurrentColorBpcLimited,
+        .getValidValues = NULL,
+        .type           = NV_KMS_ATTRIBUTE_TYPE_BOOLEAN,
     },
 };
 

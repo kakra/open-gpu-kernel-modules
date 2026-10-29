@@ -3778,9 +3778,10 @@ static NvBool GetDisplayColorBpc(
     struct NvKmsKapiDevice *device,
     NvKmsKapiDisplay display,
     NvU32 *pBpc,
-    NvU32 *pMaxBpc)
+    NvU32 *pMaxBpc,
+    NvBool *pLimited)
 {
-    NvS64 bpc, maxBpc;
+    NvS64 bpc, maxBpc, limited;
 
     if (device->hKmsDevice == 0x0) {
         return NV_FALSE;
@@ -3790,12 +3791,16 @@ static NvBool GetDisplayColorBpc(
                              NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC, &bpc) ||
         !GetDisplayAttribute(device, display,
                              NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_BPC_MAX,
-                             &maxBpc)) {
+                             &maxBpc) ||
+        !GetDisplayAttribute(device, display,
+                             NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_LIMITED,
+                             &limited)) {
         return NV_FALSE;
     }
 
     *pBpc = bpc;
     *pMaxBpc = maxBpc;
+    *pLimited = (limited != 0);
 
     return NV_TRUE;
 }

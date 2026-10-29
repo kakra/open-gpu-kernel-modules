@@ -2780,6 +2780,14 @@ enum NvKmsDpyAttribute {
      * NVKMS chooses itself (IT content, graphics, for CTA modes).
      */
     NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE,
+
+    /*
+     * Whether NV_KMS_DPY_ATTRIBUTE_REQUESTED_COLOR_BPC_MAX lowered the
+     * current bpc. If not, the bpc is held down by something else (the
+     * display, the link bandwidth or a requested bpc), and a higher limit
+     * wouldn't raise it.
+     */
+    NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_LIMITED,
 };
 
 /*! Values for the NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE attribute. */

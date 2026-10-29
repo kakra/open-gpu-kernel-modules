@@ -502,9 +502,10 @@ static int nv_drm_connector_atomic_get_property(
 
 #if defined(NV_DRM_CONNECTOR_FUNCS_HAVE_DEBUGFS_INIT) && defined(CONFIG_DEBUG_FS)
 /*
- * current_bpc: the bpc NVKMS currently drives the display with, and the bpc
- * limit NVKMS has stored for it from "max bpc" (0 for none). DRM core's
- * output_bpc file next to it shows the maximum the display supports.
+ * current_bpc: the bpc NVKMS currently drives the display with, the bpc
+ * limit NVKMS has stored for it from "max bpc" (0 for none), and whether
+ * that limit lowered the bpc. DRM core's output_bpc file next to it shows the
+ * maximum the display supports.
  */
 static int nv_drm_connector_current_bpc_show(struct seq_file *m, void *data)
 {
@@ -514,6 +515,7 @@ static int nv_drm_connector_current_bpc_show(struct seq_file *m, void *data)
     struct nv_drm_connector *nv_connector = to_nv_connector(connector);
     NvU32 bpc = 0;
     NvU32 max_bpc = 0;
+    NvBool limited = NV_FALSE;
     int idx;
     int ret = 0;
 
@@ -528,7 +530,7 @@ static int nv_drm_connector_current_bpc_show(struct seq_file *m, void *data)
         (nv_connector->nv_detected_encoder != NULL) &&
         !nvKms->getDisplayColorBpc(nv_dev->pDevice,
                                    nv_connector->nv_detected_encoder->hDisplay,
-                                   &bpc, &max_bpc)) {
+                                   &bpc, &max_bpc, &limited)) {
         ret = -EIO;
     }
 
@@ -539,6 +541,7 @@ static int nv_drm_connector_current_bpc_show(struct seq_file *m, void *data)
     if (ret == 0) {
         seq_printf(m, "Current: %u\n", bpc);
         seq_printf(m, "Maximum: %u\n", max_bpc);
+        seq_printf(m, "Limited: %s\n", limited ? "yes" : "no");
     }
 
     return ret;
@@ -791,10 +794,11 @@ static NvU8 nv_drm_connector_round_max_bpc(unsigned int max_bpc)
 
 /*
  * A "max bpc" change only needs a modeset if it changes the bpc NVKMS drives
- * the display with. When the new limit is still at least the current bpc and
- * not higher than the old limit, the next modeset would pick the same bpc, so
- * NVKMS only has to store the limit, which a flip does as well. A higher
- * limit may allow a higher bpc, so it still needs a modeset.
+ * the display with. When the new limit is still at least the current bpc, the
+ * next modeset would pick the same bpc, so NVKMS only has to store the limit,
+ * which a flip does as well. Unless the limit is raised while the old limit
+ * held the bpc down: then a higher bpc may be possible. If something else
+ * held it down, like the link bandwidth, a higher limit doesn't change it.
  *
  * DRM core flags the CRTC's connectors as changed for any "max bpc" change.
  * Only skip the modeset if that is the only reason: same CRTC, encoder, link
@@ -820,6 +824,7 @@ nv_drm_connector_max_bpc_needs_modeset(struct drm_connector *connector,
         nv_drm_connector_round_max_bpc(new_connector_state->max_requested_bpc);
     NvU32 bpc = 0;
     NvU32 stored_max_bpc = 0;
+    NvBool limited = NV_FALSE;
 
     if (crtc_state->mode_changed ||
         crtc_state->active_changed ||
@@ -839,10 +844,6 @@ nv_drm_connector_max_bpc_needs_modeset(struct drm_connector *connector,
         return true;
     }
 
-    if (new_max_bpc > old_max_bpc) {
-        return true;
-    }
-
     /*
      * Commits reach NVKMS before the commit ioctl returns, so NVKMS drives
      * the display as in the old state; it must also have stored the old
@@ -850,13 +851,14 @@ nv_drm_connector_max_bpc_needs_modeset(struct drm_connector *connector,
      */
     if (!nvKms->getDisplayColorBpc(nv_dev->pDevice,
                                    nv_connector->nv_detected_encoder->hDisplay,
-                                   &bpc, &stored_max_bpc)) {
+                                   &bpc, &stored_max_bpc, &limited)) {
         return true;
     }
 
     return (stored_max_bpc != old_max_bpc) ||
            (bpc == 0) ||
-           (bpc > new_max_bpc);
+           (bpc > new_max_bpc) ||
+           ((new_max_bpc > old_max_bpc) && limited);
 }
 
 static int
