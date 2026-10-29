@@ -348,7 +348,8 @@ serverControlApiCopyOut
 }
 
 static NV_STATUS
-_rmapiRmControl(NvHandle hClient, NvHandle hObject, NvU32 cmd, NvP64 pUserParams, NvU32 paramsSize, NvU32 flags, RM_API *pRmApi, API_SECURITY_INFO *pSecInfo)
+_rmapiRmControl(NvHandle hClient, NvHandle hObject, NvU32 cmd, NvP64 pUserParams, NvU32 paramsSize, NvU32 flags, RM_API *pRmApi, API_SECURITY_INFO *pSecInfo,
+                NvBool bForceGpuAccessRef, NvBool *pbSkippedGpuAccessRef)
 {
     OBJSYS    *pSys = SYS_GET_INSTANCE();
     RmCtrlParams rmCtrlParams;
@@ -605,8 +606,10 @@ _rmapiRmControl(NvHandle hClient, NvHandle hObject, NvU32 cmd, NvP64 pUserParams
         // sysmem semaphores and CPU-side waiter lists and don't need the GPU
         // awake: skip the reference for them.
         //
-        const NvBool bSkipGpuAccessRef = (getCtrlInfoStatus == NV_OK) &&
+        const NvBool bSkipGpuAccessRef = !bForceGpuAccessRef &&
+                                         (getCtrlInfoStatus == NV_OK) &&
                                          ((ctrlFlags & RMCTRL_FLAGS_NO_API_LOCK) != 0);
+        *pbSkippedGpuAccessRef = bSkipGpuAccessRef;
         RM_API_CONTEXT rmApiContext = {0};
         if (!bSkipGpuAccessRef)
         {
@@ -1090,12 +1093,27 @@ rmapiControlWithSecInfo
 )
 {
     NV_STATUS status;
+    NvBool bSkippedGpuAccessRef = NV_FALSE;
 
     NV_PRINTF(LEVEL_INFO,
               "Nv04Control: hClient:0x%x hObject:0x%x cmd:0x%x params:" NvP64_fmt " paramSize:0x%x flags:0x%x\n",
               hClient, hObject, cmd, pParams, paramsSize, flags);
 
-    status = _rmapiRmControl(hClient, hObject, cmd, pParams, paramsSize, flags, pRmApi, pSecInfo);
+    status = _rmapiRmControl(hClient, hObject, cmd, pParams, paramsSize, flags, pRmApi, pSecInfo,
+                             NV_FALSE, &bSkippedGpuAccessRef);
+
+    //
+    // Without the GPU access reference, a control on a GPU in runtime D3
+    // fails the full power check before it runs. Retry once with the
+    // reference, which wakes the GPU: callers of the semaphore surface
+    // UNREGISTER_WAITER treat a failure as "the waiter is already being
+    // notified", so it must not fail for a waiter that is still registered.
+    //
+    if ((status == NV_ERR_GPU_NOT_FULL_POWER) && bSkippedGpuAccessRef)
+    {
+        status = _rmapiRmControl(hClient, hObject, cmd, pParams, paramsSize, flags, pRmApi, pSecInfo,
+                                 NV_TRUE, &bSkippedGpuAccessRef);
+    }
 
     if (status == NV_OK)
     {
