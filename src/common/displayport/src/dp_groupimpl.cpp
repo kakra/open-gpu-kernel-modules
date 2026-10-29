@@ -144,6 +144,7 @@ void GroupImpl::insert(Device * dev)
 {
     DP_ASSERT(!headInFirmware && "Cannot add or remove from a firmware group.  You must perform a modeset away from the device");
     DeviceImpl * di = (DeviceImpl *)dev;
+    bool bJoinsActiveStream = false;
 
     if (isHeadAttached())
     {
@@ -152,6 +153,7 @@ void GroupImpl::insert(Device * dev)
             DP_ASSERT(0 && "Device already in active group, cannot add to another active group!");
             return;
         }
+        bJoinsActiveStream = (di->activeGroup == NULL);
         di->activeGroup = this;
     }
 
@@ -199,6 +201,16 @@ void GroupImpl::insert(Device * dev)
 
         parent->main->configureAndTriggerECF(ecf);
         this->hdcpEnabled = false;
+    }
+
+    //
+    // The device joins a stream that is already driven, e.g. a zombie device
+    // the client adds back after it reappeared. No modeset follows, so restore
+    // its DSC state, which remove() dropped, before the stream is mapped to it.
+    //
+    if (bJoinsActiveStream)
+    {
+        parent->restoreDscOnReappearedDevice(di);
     }
 
     update(dev, true);
