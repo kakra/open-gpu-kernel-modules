@@ -1729,13 +1729,16 @@ struct NvKmsKapiFunctionsTable {
      * Query the output color bpc that a display is currently driven with,
      * and the bpc limit stored for it.
      *
-     * \param [in]  device   A device allocated using allocateDevice().
+     * \param [in]  device    A device allocated using allocateDevice().
      *
-     * \param [in]  display  The display to query.
+     * \param [in]  display   The display to query.
      *
-     * \param [out] pBpc     The current bpc, 0 if unknown.
+     * \param [out] pBpc      The current bpc, 0 if unknown.
      *
-     * \param [out] pMaxBpc  The bpc limit, 0 for none.
+     * \param [out] pMaxBpc   The bpc limit, 0 for none.
+     *
+     * \param [out] pLimited  Whether the limit lowered the current bpc; if
+     *                        not, a higher limit wouldn't raise it.
      *
      * \return NV_TRUE on success, NV_FALSE on failure.
      */
@@ -1743,7 +1746,8 @@ struct NvKmsKapiFunctionsTable {
         struct NvKmsKapiDevice *device,
         NvKmsKapiDisplay display,
         NvU32 *pBpc,
-        NvU32 *pMaxBpc
+        NvU32 *pMaxBpc,
+        NvBool *pLimited
     );
 };
 
