@@ -128,6 +128,13 @@ struct NvKmsKapiDevice {
 
     NvBool coherentGpuMemory;
 
+    /*
+     * Modeset ownership or sub-ownership changed since the last committed
+     * modeset. NVKMS can't keep the heads a modeset doesn't request then, it
+     * shuts them down, so modeset all heads of a commit.
+     */
+    NvBool modesetOwnershipChanged;
+
     /* SMG state */
 
     MIGDeviceId migDevice;
