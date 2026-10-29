@@ -1088,10 +1088,15 @@ static NvBool GrabOwnership(struct NvKmsKapiDevice *device)
 
     paramsGrab.request.deviceHandle = device->hKmsDevice;
 
-    return nvkms_ioctl_from_kapi(device->pKmsOpen,
-                                 NVKMS_IOCTL_GRAB_OWNERSHIP,
-                                 &paramsGrab, sizeof(paramsGrab));
+    if (!nvkms_ioctl_from_kapi(device->pKmsOpen,
+                               NVKMS_IOCTL_GRAB_OWNERSHIP,
+                               &paramsGrab, sizeof(paramsGrab))) {
+        return NV_FALSE;
+    }
 
+    device->modesetOwnershipChanged = NV_TRUE;
+
+    return NV_TRUE;
 }
 
 static void ReleaseOwnership(struct NvKmsKapiDevice *device)
@@ -1107,6 +1112,8 @@ static void ReleaseOwnership(struct NvKmsKapiDevice *device)
     nvkms_ioctl_from_kapi(device->pKmsOpen,
                           NVKMS_IOCTL_RELEASE_OWNERSHIP,
                           &paramsRelease, sizeof(paramsRelease));
+
+    device->modesetOwnershipChanged = NV_TRUE;
 }
 
 static NvBool GrantPermissions
@@ -1188,6 +1195,8 @@ static NvBool GrantSubOwnership
     paramsGrant.request.fd = fd;
     paramsGrant.request.deviceHandle = device->hKmsDevice;
 
+    device->modesetOwnershipChanged = NV_TRUE;
+
     return nvkms_ioctl_from_kapi(device->pKmsOpen,
                                  NVKMS_IOCTL_GRANT_PERMISSIONS, &paramsGrant,
                                  sizeof(paramsGrant));
@@ -1209,6 +1218,8 @@ static NvBool RevokeSubOwnership
         NVBIT(NV_KMS_PERMISSIONS_TYPE_MODESET) |
         NVBIT(NV_KMS_PERMISSIONS_TYPE_SUB_OWNER);
     paramsRevoke.request.deviceHandle = device->hKmsDevice;
+
+    device->modesetOwnershipChanged = NV_TRUE;
 
     return nvkms_ioctl_from_kapi(device->pKmsOpen,
                                  NVKMS_IOCTL_REVOKE_PERMISSIONS, &paramsRevoke,
@@ -3875,6 +3886,11 @@ static NvBool KmsSetMode(
         status = NV_FALSE;
     }
 
+    /* A committed modeset lets NVKMS keep unrequested heads again */
+    if (status && commit) {
+        device->modesetOwnershipChanged = NV_FALSE;
+    }
+
 done:
 
     if (params != NULL) {
@@ -4135,14 +4151,125 @@ done:
     return status;
 }
 
+/*
+ * Whether a head of a commit needs the NVKMS modeset ioctl rather than a flip.
+ */
+static NvBool HeadRequiresModeset(
+    const struct NvKmsKapiDevice *device,
+    const struct NvKmsKapiHeadRequestedConfig *headRequestedConfig,
+    const NvBool commit)
+{
+    const struct NvKmsKapiHeadModeSetConfig *headModeSetConfig =
+        &headRequestedConfig->modeSetConfig;
+    NvBool bRequiredModeset =
+        headRequestedConfig->flags.activeChanged       ||
+        headRequestedConfig->flags.displaysChanged     ||
+        headRequestedConfig->flags.modeChanged;
+
+    if (!device->caps.supportsFlipSynchronizedInfoframes) {
+        bRequiredModeset |=
+            headRequestedConfig->flags.hdrInfoFrameChanged ||
+            headRequestedConfig->flags.colorimetryChanged  ||
+            headRequestedConfig->flags.hdmiVsifMetadataChanged;
+    }
+
+    /*
+     * NVKMS flip ioctl could not validate flip configuration for an
+     * inactive head, therefore use modeset ioctl if configuration contain
+     * any such head.
+     */
+    if (!commit &&
+        headModeSetConfig->numDisplays != 0 && !headModeSetConfig->bActive) {
+        bRequiredModeset = NV_TRUE;
+    }
+
+    return bRequiredModeset;
+}
+
+/*
+ * Run KmsSetMode() or KmsFlip() on a subset of the heads of a commit.
+ */
+static NvBool KmsSetModeOrFlipHeads(
+    struct NvKmsKapiDevice *device,
+    const struct NvKmsKapiRequestedModeSetConfig *requestedConfig,
+    const NvU32 headsMask,
+    struct NvKmsKapiModeSetReplyConfig *replyConfig,
+    const NvBool commit,
+    const NvBool bModeset)
+{
+    struct NvKmsKapiRequestedModeSetConfig *pSubConfig;
+    NvBool status;
+
+    pSubConfig = nvKmsKapiCalloc(1, sizeof(*pSubConfig));
+    if (pSubConfig == NULL) {
+        return NV_FALSE;
+    }
+
+    nvkms_memcpy(pSubConfig, requestedConfig, sizeof(*pSubConfig));
+    pSubConfig->headsMask = headsMask;
+
+    status = bModeset ?
+        KmsSetMode(device, pSubConfig, replyConfig, commit) :
+        KmsFlip(device, pSubConfig, replyConfig, commit);
+
+    nvKmsKapiFree(pSubConfig);
+
+    return status;
+}
+
+/*
+ * Commit a modeset that only some of the heads in the commit need.
+ *
+ * DRM decides per CRTC whether a commit needs a modeset; the other CRTCs of
+ * the commit only update their planes and color state. NVKMS on the other
+ * hand fully reprograms every head in a modeset request, which for DP and
+ * eDP includes shutting the link down and training it again. So modeset
+ * only the heads that need it, which leaves the others as they are, and
+ * flip the others afterwards.
+ *
+ * The TEST_ONLY check validated the final state of all heads with one
+ * modeset request. The modeset of the subset passes through an
+ * intermediate state, the other heads still with their old layers, that
+ * was not validated; NVKMS validates a modeset before it touches the
+ * hardware, so if that fails, modeset all heads as before. If the flip of
+ * the other heads fails, apply their state with a modeset after all.
+ */
+static NvBool KmsSetModeChangedHeads(
+    struct NvKmsKapiDevice *device,
+    const struct NvKmsKapiRequestedModeSetConfig *requestedConfig,
+    const NvU32 modesetHeadsMask,
+    struct NvKmsKapiModeSetReplyConfig *replyConfig)
+{
+    const NvU32 flipHeadsMask = requestedConfig->headsMask & ~modesetHeadsMask;
+
+    if (!KmsSetModeOrFlipHeads(device, requestedConfig, modesetHeadsMask,
+                               replyConfig, NV_TRUE, NV_TRUE)) {
+        nvKmsKapiLogDeviceDebug(device,
+            "Modeset of heads 0x%x alone failed, modesetting all heads 0x%x",
+            modesetHeadsMask, requestedConfig->headsMask);
+        return KmsSetMode(device, requestedConfig, replyConfig, NV_TRUE);
+    }
+
+    if (!KmsSetModeOrFlipHeads(device, requestedConfig, flipHeadsMask,
+                               replyConfig, NV_TRUE, NV_FALSE)) {
+        nvKmsKapiLogDeviceDebug(device,
+            "Flip of heads 0x%x after a modeset failed, modesetting them",
+            flipHeadsMask);
+        return KmsSetModeOrFlipHeads(device, requestedConfig, flipHeadsMask,
+                                     replyConfig, NV_TRUE, NV_TRUE);
+    }
+
+    return NV_TRUE;
+}
+
 static NvBool ApplyModeSetConfig(
     struct NvKmsKapiDevice *device,
     const struct NvKmsKapiRequestedModeSetConfig *requestedConfig,
     struct NvKmsKapiModeSetReplyConfig *replyConfig,
     const NvBool commit)
 {
-    NvBool bRequiredModeset = NV_FALSE;
-    NvU32  head;
+    NvU32 modesetHeadsMask = 0;
+    NvU32 head;
 
     if (device == NULL || requestedConfig == NULL) {
         return NV_FALSE;
@@ -4151,38 +4278,14 @@ static NvBool ApplyModeSetConfig(
     for (head = 0;
          head < ARRAY_LEN(requestedConfig->headRequestedConfig); head++) {
 
-        const struct NvKmsKapiHeadRequestedConfig *headRequestedConfig =
-            &requestedConfig->headRequestedConfig[head];
-        const struct NvKmsKapiHeadModeSetConfig *headModeSetConfig =
-            &headRequestedConfig->modeSetConfig;
-
         if ((requestedConfig->headsMask & (1 << head)) == 0x0) {
             continue;
         }
 
-        bRequiredModeset =
-            headRequestedConfig->flags.activeChanged       ||
-            headRequestedConfig->flags.displaysChanged     ||
-            headRequestedConfig->flags.modeChanged;
-
-        if (!device->caps.supportsFlipSynchronizedInfoframes) {
-            bRequiredModeset |=
-                headRequestedConfig->flags.hdrInfoFrameChanged ||
-                headRequestedConfig->flags.colorimetryChanged  ||
-                headRequestedConfig->flags.hdmiVsifMetadataChanged;
-        }
-        /*
-         * NVKMS flip ioctl could not validate flip configuration for an
-         * inactive head, therefore use modeset ioctl if configuration contain
-         * any such head.
-         */
-        if (!commit &&
-            headModeSetConfig->numDisplays != 0 && !headModeSetConfig->bActive) {
-            bRequiredModeset = TRUE;
-        }
-
-        if (bRequiredModeset) {
-            break;
+        if (HeadRequiresModeset(device,
+                                &requestedConfig->headRequestedConfig[head],
+                                commit)) {
+            modesetHeadsMask |= 1 << head;
         }
     }
 
@@ -4197,11 +4300,19 @@ static NvBool ApplyModeSetConfig(
         SetRequestedColorBpcMax(device, requestedConfig);
     }
 
-    if (bRequiredModeset) {
-        return KmsSetMode(device, requestedConfig, replyConfig, commit);
+    if (modesetHeadsMask == 0x0) {
+        return KmsFlip(device, requestedConfig, replyConfig, commit);
     }
 
-    return KmsFlip(device, requestedConfig, replyConfig, commit);
+    if (commit &&
+        (modesetHeadsMask != requestedConfig->headsMask) &&
+        !device->modesetOwnershipChanged &&
+        nvkms_modeset_changed_heads_only()) {
+        return KmsSetModeChangedHeads(device, requestedConfig,
+                                      modesetHeadsMask, replyConfig);
+    }
+
+    return KmsSetMode(device, requestedConfig, replyConfig, commit);
 }
 
 /*
