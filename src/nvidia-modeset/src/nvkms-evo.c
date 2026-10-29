@@ -7028,6 +7028,9 @@ void nvLimitColorBpcEvo(const NVDpyEvoRec *pDpyEvo,
 {
     const NvKmsDpyOutputColorFormatInfo supportedColorFormats =
         nvDpyGetOutputColorFormatInfo(pDpyEvo);
+    const enum NvKmsDpyAttributeColorBpcValue bpc = pDpyColor->bpc;
+
+    pDpyColor->bpcLimited = FALSE;
 
     if (maxBpc == NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_UNKNOWN) {
         return;
@@ -7043,6 +7046,8 @@ void nvLimitColorBpcEvo(const NVDpyEvoRec *pDpyEvo,
 
         *pDpyColor = dpyColor;
     }
+
+    pDpyColor->bpcLimited = (pDpyColor->bpc < bpc);
 }
 
 NvBool nvDowngradeColorFormatAndBpc(
