@@ -107,6 +107,12 @@ module_param_named(enable_overlay_layers, enable_overlay_layers, bool, 0444);
 static bool opportunistic_flip_sync = true;
 module_param_named(opportunistic_flip_sync, opportunistic_flip_sync, bool, 0444);
 
+static bool modeset_changed_heads_only = true;
+module_param_named(modeset_changed_heads_only, modeset_changed_heads_only, bool, 0644);
+MODULE_PARM_DESC(modeset_changed_heads_only,
+                 "When a DRM commit needs a modeset, only modeset the CRTCs that "
+                 "need one and flip the others, instead of modesetting all of them");
+
 /* These parameters are used for fault injection tests.  Normally the defaults
  * should be used. */
 MODULE_PARM_DESC(fail_malloc, "Fail the Nth call to nvkms_alloc");
@@ -290,6 +296,11 @@ NvBool nvkms_enable_overlay_layers(void)
 NvBool nvkms_opportunistic_flip_sync(void)
 {
     return opportunistic_flip_sync;
+}
+
+NvBool nvkms_modeset_changed_heads_only(void)
+{
+    return READ_ONCE(modeset_changed_heads_only);
 }
 
 NvBool nvkms_debug_logging(void)
