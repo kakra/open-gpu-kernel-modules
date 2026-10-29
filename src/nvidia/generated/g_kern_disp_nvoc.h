@@ -123,6 +123,8 @@ typedef struct
     NvHandle hChannel;
     NvU32    channelNum;
     NvBool   bInUse;
+    // Read by the awaken interrupt without the GPU lock; set/cleared under the low latency lock
+    struct DispChannel *pDispChannel;
 } KernelDisplayClientChannelMap;
 
 typedef void (*OSVBLANKCALLBACKPROC)(NvP64 pParm1, NvP64 pParm2);
