@@ -15,6 +15,7 @@ NV_HEADER_PRESENCE_TESTS = \
   drm/drm_managed.h \
   drm/drm_probe_helper.h \
   drm/clients/drm_client_setup.h \
+  drm/clients/drm_fbdev_helper.h \
   dt-bindings/interconnect/tegra_icc_id.h \
   generated/autoconf.h \
   generated/compile.h \
