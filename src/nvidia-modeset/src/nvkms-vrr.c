@@ -970,26 +970,37 @@ VrrUnstallTimer(void *dataPtr, NvU32 dataU32)
  * for some time in the future in order to give the application some time to
  * respond, but force a minimum refresh rate if it doesn't.
  *
+ * Only the VRR head the cursor moved on needs this: the other heads' screens
+ * didn't change, and an unstall would add a refresh to their refresh rate. The
+ * timer is shared, so a head that moves its cursor while it is running gets
+ * less than the full timeout.
+ *
  * On nvdisplay, this schedules an nvkms timer and uses a method to trigger an
  * unstall. On EVO, it calls into RM to do something equivalent.
  */
-void nvTriggerVrrUnstallMoveCursor(NVDispEvoPtr pDispEvo)
+void nvTriggerVrrUnstallMoveCursor(NVDispEvoPtr pDispEvo, const NvU32 head)
 {
-    NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
     const NvU32 timeoutMs = 33; // 30 fps
 
     NvU32 apiHead;
+    NvBool pending = NV_FALSE;
 
-    if (!AnyActiveVrrHeads(pDevEvo)) {
+    for (apiHead = 0; apiHead < NVKMS_MAX_HEADS_PER_DISP; apiHead++) {
+        NVDispApiHeadStateEvoRec *pApiHeadState =
+            &pDispEvo->apiHeadState[apiHead];
+
+        if (pApiHeadState->vrr.active &&
+            ((pApiHeadState->hwHeadsMask & NVBIT(head)) != 0)) {
+            pApiHeadState->vrr.pendingCursorMotion = NV_TRUE;
+            pending = NV_TRUE;
+        }
+    }
+
+    if (!pending) {
         return;
     }
 
     if (!pDispEvo->vrr.unstallTimer) {
-        for (apiHead = 0; apiHead < NVKMS_MAX_HEADS_PER_DISP; apiHead++) {
-            if (pDispEvo->apiHeadState[apiHead].vrr.active) {
-                pDispEvo->apiHeadState[apiHead].vrr.pendingCursorMotion = NV_TRUE;
-            }
-        }
         pDispEvo->vrr.unstallTimer =
             nvkms_alloc_timer(VrrUnstallTimer, pDispEvo, 0, timeoutMs * 1000);
     }
