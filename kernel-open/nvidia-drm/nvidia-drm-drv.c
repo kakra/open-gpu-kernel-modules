@@ -1537,8 +1537,8 @@ nv_drm_atomic_disable_connector(nv_drm_atomic_state_base_t *state,
     if (nv_connector->modeset_permission_crtc) {
         crtc_state = drm_atomic_get_crtc_state(
             state, &nv_connector->modeset_permission_crtc->base);
-        if (!crtc_state) {
-            return -EINVAL;
+        if (IS_ERR(crtc_state)) {
+            return PTR_ERR(crtc_state);
         }
 
         crtc_state->active = false;
@@ -1549,11 +1549,47 @@ nv_drm_atomic_disable_connector(nv_drm_atomic_state_base_t *state,
     }
 
     connector_state = drm_atomic_get_connector_state(state, &nv_connector->base);
-    if (!connector_state) {
-        return -EINVAL;
+    if (IS_ERR(connector_state)) {
+        return PTR_ERR(connector_state);
     }
 
     return drm_atomic_set_crtc_for_connector(connector_state, NULL);
+}
+
+/*
+ * Check if filep was granted any connector or crtc, without the modeset locks.
+ * Only an ioctl on filep itself can grant it something, and revoking early just
+ * means there is nothing left to do, so a client without permissions never has
+ * to take the locks here.
+ */
+static bool nv_drm_filep_has_modeset_permission(struct drm_device *dev,
+                                                struct drm_file *filep)
+{
+    struct drm_connector *connector;
+    struct drm_crtc *crtc;
+    struct drm_connector_list_iter conn_iter;
+    bool found = false;
+
+    drm_connector_list_iter_begin(dev, &conn_iter);
+    drm_for_each_connector_iter(connector, &conn_iter) {
+        if (to_nv_connector(connector)->modeset_permission_filep == filep) {
+            found = true;
+            break;
+        }
+    }
+    drm_connector_list_iter_end(&conn_iter);
+
+    if (found) {
+        return true;
+    }
+
+    nv_drm_for_each_crtc(crtc, dev) {
+        if (to_nv_crtc(crtc)->modeset_permission_filep == filep) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 static int nv_drm_revoke_modeset_permission(struct drm_device *dev,
@@ -1564,9 +1600,17 @@ static int nv_drm_revoke_modeset_permission(struct drm_device *dev,
     struct drm_connector *connector;
     struct drm_crtc *crtc;
     int ret = 0;
+    bool need_commit = false;
     struct drm_connector_list_iter conn_iter;
 #if NV_DRM_MODESET_LOCK_ALL_END_ARGUMENT_COUNT == 3
     struct drm_modeset_acquire_ctx ctx;
+#endif
+
+    if (!nv_drm_filep_has_modeset_permission(dev, filep)) {
+        return 0;
+    }
+
+#if NV_DRM_MODESET_LOCK_ALL_END_ARGUMENT_COUNT == 3
     DRM_MODESET_LOCK_ALL_BEGIN(dev, ctx, DRM_MODESET_ACQUIRE_INTERRUPTIBLE,
                                ret);
     pctx = &ctx;
@@ -1578,7 +1622,7 @@ static int nv_drm_revoke_modeset_permission(struct drm_device *dev,
     state = nv_drm_atomic_state_base_alloc(dev);
     if (!state) {
         ret = -ENOMEM;
-        goto done;
+        goto unlock;
     }
     state->acquire_ctx = pctx;
 
@@ -1593,8 +1637,11 @@ static int nv_drm_revoke_modeset_permission(struct drm_device *dev,
             (!dpyId || nv_drm_connector_is_dpy_id(connector, dpyId))) {
             ret = nv_drm_atomic_disable_connector(state, nv_connector);
             if (ret < 0) {
+                drm_connector_list_iter_end(&conn_iter);
                 goto done;
             }
+
+            need_commit = true;
 
             // Continue trying to revoke as much as possible.
             nv_drm_connector_revoke_permissions(dev, nv_connector);
@@ -1609,9 +1656,12 @@ static int nv_drm_revoke_modeset_permission(struct drm_device *dev,
         }
     }
 
-    ret = drm_atomic_commit(state);
+    if (need_commit) {
+        ret = drm_atomic_commit(state);
+    }
 done:
     nv_drm_atomic_state_base_put(state);
+unlock:
 
 #if NV_DRM_MODESET_LOCK_ALL_END_ARGUMENT_COUNT == 3
     DRM_MODESET_LOCK_ALL_END(dev, ctx, ret);
