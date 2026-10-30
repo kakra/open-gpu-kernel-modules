@@ -3030,18 +3030,17 @@ nv_pci_shutdown(struct pci_dev *pci_dev)
 
     /*
      * Hibernation in the shutdown and reboot modes powers off through
-     * device_shutdown() while the GPU is still suspended for hibernation:
-     * the PM notifier or procfs suspend holds nvkms_pm_lock for writing
-     * until a resume that never comes, and nv_pmops_thaw() leaves the GPU
-     * suspended. Tearing the driver down then deadlocks or waits forever on
-     * the GPU. The GPU is already shut down, power is about to be cut and
-     * resume goes through nv_pmops_restore(), so only disable bus mastering,
-     * as drivers before 595 did.
+     * device_shutdown() with user space frozen, so clients never close the
+     * GPU, and possibly with the GPU still suspended: the PM notifier or
+     * procfs suspend holds nvkms_pm_lock for writing until a resume that
+     * never comes. Tearing the driver down then deadlocks or waits forever.
+     * Power is about to be cut and resume goes through nv_pmops_restore(), so
+     * only disable bus mastering, as drivers before 595 did.
      */
     if (nv_pci_shutdown_while_suspended(nvl))
     {
         nv_printf(NV_DBG_INFO,
-                  "NVRM: GPU suspended for hibernation, skipping teardown at shutdown\n");
+                  "NVRM: hibernating, skipping teardown at shutdown\n");
     }
     else
     {
