@@ -1219,7 +1219,7 @@ static int nv_drm_get_drm_file_unique_id_ioctl(struct drm_device *dev,
                                                void *data, struct drm_file *filep)
 {
     struct drm_nvidia_get_drm_file_unique_id_params *params = data;
-    params->id = (u64)(filep->driver_priv);
+    params->id = to_nv_drm_file(filep)->id;
     return 0;
 }
 
@@ -1748,15 +1748,22 @@ static void nv_drm_postclose(struct drm_device *dev, struct drm_file *filep)
         dev->mode_config.connector_list.prev != NULL) {
         nv_drm_revoke_modeset_permission(dev, filep, 0);
     }
+
+    nv_drm_free(filep->driver_priv);
+    filep->driver_priv = NULL;
 }
 
 static int nv_drm_open(struct drm_device *dev, struct drm_file *filep)
 {
-    _Static_assert(sizeof(filep->driver_priv) >= sizeof(u64),
-                   "filep->driver_priv can not hold an u64");
     static atomic64_t id = ATOMIC_INIT(0);
+    struct nv_drm_file *nv_file = nv_drm_calloc(1, sizeof(*nv_file));
 
-    filep->driver_priv = (void *)atomic64_inc_return(&id);
+    if (nv_file == NULL) {
+        return -ENOMEM;
+    }
+
+    nv_file->id = atomic64_inc_return(&id);
+    filep->driver_priv = nv_file;
 
     return 0;
 }

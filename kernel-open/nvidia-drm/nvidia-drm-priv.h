@@ -365,6 +365,15 @@ static inline struct nv_drm_device *to_nv_device(
     return dev->dev_private;
 }
 
+/* Per open file data, in drm_file::driver_priv */
+struct nv_drm_file {
+    /* Returned by DRM_IOCTL_NVIDIA_GET_DRM_FILE_UNIQUE_ID */
+    u64 id;
+};
+
+/* A macro, struct drm_file is not defined in every file including this one */
+#define to_nv_drm_file(filep) ((struct nv_drm_file *)(filep)->driver_priv)
+
 extern const struct NvKmsKapiFunctionsTable* const nvKms;
 
 #endif /* defined(NV_DRM_AVAILABLE) */
