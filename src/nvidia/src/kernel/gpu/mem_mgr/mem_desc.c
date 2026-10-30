@@ -4804,7 +4804,7 @@ NvU64 memdescGetAdjustedPageSize(
         if (pageSize == 0)
         {
             pageSize = osGetPageSize();
-            memdescSetPageSize(pMemDesc, AT_GPU, pageSize);
+            memdescSetPageSize(pMemDesc, AT_GPU, RM_OS_PAGE_SIZE_TO_GPU(pageSize));
         }
     }
 

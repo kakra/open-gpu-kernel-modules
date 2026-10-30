@@ -1736,7 +1736,7 @@ _memmgrPickDefaultSysmemPageSize
     // If large pages are not supported, return the OS page size.
     if (!bDefaultAllowLargePages)
     {
-        return osGetPageSize();
+        return RM_OS_PAGE_SIZE_TO_GPU(osGetPageSize());
     }
 
     // Choose largest page size that fits the allocation
@@ -1754,7 +1754,7 @@ _memmgrPickDefaultSysmemPageSize
     }
     else
     {
-        pageSize = osGetPageSize();
+        pageSize = RM_OS_PAGE_SIZE_TO_GPU(osGetPageSize());
     }
 
     return pageSize;

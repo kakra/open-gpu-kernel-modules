@@ -39,6 +39,15 @@
 #define RM_PAGE_SIZE_64K     (64 * 1024)
 #define RM_PAGE_SIZE_128K    (128 * 1024)
 #define RM_PAGE_MASK         0x0FFF
+
+//
+// GPU page size to use for memory carved at the OS page size. An OS page size
+// below the big page size (16K on some arm64 and loongarch kernels) isn't a size
+// the GMMU can map, so such memory is mapped with small pages.
+//
+#define RM_OS_PAGE_SIZE_TO_GPU(osPageSize) \
+    (((osPageSize) < RM_PAGE_SIZE_64K) ? (NvU64)RM_PAGE_SIZE : (NvU64)(osPageSize))
+
 #define RM_PAGE_SHIFT        12
 #define RM_PAGE_SHIFT_64K    16
 #define RM_PAGE_SHIFT_128K   17
