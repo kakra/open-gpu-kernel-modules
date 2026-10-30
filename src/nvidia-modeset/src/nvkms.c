@@ -169,6 +169,7 @@ struct NvKmsPerOpenDev {
     NVEvoApiHandlesRec           vblankCallbackHandles[NVKMS_MAX_HEADS_PER_DISP];
     NVEvoApiHandlesRec           vblankSemControlHandles;
     NVEvoApiHandlesRec           vblankIntrCallbackHandles[NVKMS_MAX_HEADS_PER_DISP];
+    NvBool                       beingFreed;
 };
 
 struct NvKmsPerOpenEventListEntry {
@@ -1555,6 +1556,11 @@ static void DisableRemainingVblankSemControls(
 static void FreeDeviceReference(struct NvKmsPerOpen *pOpen,
                                 struct NvKmsPerOpenDev *pOpenDev)
 {
+    NVDevEvoPtr pDevEvo = pOpenDev->pDevEvo;
+
+    /* Keep a nested nvRevokeDevice() from freeing this pOpenDev as well. */
+    pOpenDev->beingFreed = TRUE;
+
     /* Disable all client-owned vblank sync objects that still exist. */
     DisableRemainingVblankSyncObjects(pOpen, pOpenDev);
 
@@ -1567,7 +1573,12 @@ static void FreeDeviceReference(struct NvKmsPerOpen *pOpen,
     nvEvoFreeClientSurfaces(pOpenDev->pDevEvo, pOpenDev,
                             &pOpenDev->surfaceHandles);
 
-    if (!nvFreeDevEvo(pOpenDev->pDevEvo)) {
+    if (!nvFreeDevEvo(pDevEvo)) {
+        // Releasing ownership can revoke the device if the core channel can't
+        // be reallocated, which drops every other reference.  Hold one until
+        // this function is done with pDevEvo.
+        pDevEvo->allocRefCnt++;
+
         // If this pOpenDev is the modeset owner, implicitly release it.  Does
         // nothing if this pOpenDev is not the modeset owner.
         //
@@ -1575,13 +1586,17 @@ static void FreeDeviceReference(struct NvKmsPerOpen *pOpen,
         // ownership.
         ReleaseModesetOwnership(pOpenDev);
 
-        nvAssert(pOpenDev->pDevEvo->modesetOwner != pOpenDev);
+        nvAssert(pDevEvo->modesetOwner != pOpenDev);
 
         // If this pOpenDev is the modeset sub-owner, implicitly release it.
-        if (pOpenDev->pDevEvo->modesetSubOwner == pOpenDev) {
-            pOpenDev->pDevEvo->modesetSubOwner = NULL;
-            pOpenDev->pDevEvo->modesetOwnerOrSubOwnerChanged = TRUE;
+        if (pDevEvo->modesetSubOwner == pOpenDev) {
+            pDevEvo->modesetSubOwner = NULL;
+            pDevEvo->modesetOwnerOrSubOwnerChanged = TRUE;
         }
+
+        nvFreePerOpenDev(pOpen, pOpenDev);
+        nvFreeDevEvo(pDevEvo);
+        return;
     }
 
     nvFreePerOpenDev(pOpen, pOpenDev);
@@ -5221,6 +5236,10 @@ void nvRevokeDevice(NVDevEvoPtr pDevEvo)
         if (pOpenDev == pDevEvo->pNvKmsOpenDev) {
             // do not free the internal pOpenDev, as that is handled
             // by nvFreeDevEvo
+            continue;
+        }
+        if (pOpenDev->beingFreed) {
+            // Called from below FreeDeviceReference() of this pOpenDev.
             continue;
         }
         FreeDeviceReference(pOpen, pOpenDev);
