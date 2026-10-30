@@ -2139,6 +2139,10 @@ static NvBool RmGc6BlockerRefCntAction(const struct NvKmsKapiDevice *device,
     NV_STATUS status;
     NV2080_CTRL_OS_UNIX_GC6_BLOCKER_REFCNT_PARAMS params = { 0 };
 
+    if (device == NULL) {
+        return NV_FALSE;
+    }
+
     nvAssert((action == NV2080_CTRL_OS_UNIX_GC6_BLOCKER_REFCNT_INC) ||
              (action == NV2080_CTRL_OS_UNIX_GC6_BLOCKER_REFCNT_DEC));
 
@@ -2581,7 +2585,7 @@ static void DestroySurface
     struct NvKmsUnregisterSurfaceParams paramsUnreg = { };
     NvBool status;
 
-    if (device->hKmsDevice == 0x0) {
+    if (device == NULL || device->hKmsDevice == 0x0) {
         goto done;
     }
 

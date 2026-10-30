@@ -95,6 +95,9 @@
 #include <drm/drm_gem.h>
 #include <drm/drm_auth.h>
 #include <drm/drm_atomic_helper.h>
+#if defined(NV_DRM_DRM_MANAGED_H_PRESENT)
+#include <drm/drm_managed.h>
+#endif
 
 static int nv_drm_revoke_modeset_permission(struct drm_device *dev,
                                             struct drm_file *filep,
@@ -2163,6 +2166,20 @@ void nv_drm_update_drm_driver_features(void)
 
 
 
+#if defined(NV_DRM_DRM_MANAGED_H_PRESENT)
+/*
+ * nv_drm_device is used by DRM files, GEM objects and fences that can outlive
+ * drm_dev_unplug(). Keep it until the last reference to the DRM device is gone.
+ */
+static void nv_drm_dev_private_release(struct drm_device *dev, void *data)
+{
+    struct nv_drm_device *nv_dev = data;
+
+    dev->dev_private = NULL;
+    nv_drm_free(nv_dev);
+}
+#endif
+
 /*
  * Helper function for allocate/register DRM device for given NVIDIA GPU ID.
  */
@@ -2196,13 +2213,22 @@ void nv_drm_register_drm_device(const struct NvKmsKapiGpuInfo *gpu_info)
 
     dev = drm_dev_alloc(&nv_drm_driver, device);
 
-    if (dev == NULL) {
+    if (IS_ERR_OR_NULL(dev)) {
         NV_DRM_DEV_LOG_ERR(nv_dev, "Failed to allocate device");
         goto failed_drm_alloc;
     }
 
     dev->dev_private = nv_dev;
     nv_dev->dev = dev;
+
+#if defined(NV_DRM_DRM_MANAGED_H_PRESENT)
+    if (drmm_add_action(dev, nv_drm_dev_private_release, nv_dev) != 0) {
+        NV_DRM_DEV_LOG_ERR(nv_dev, "Failed to add the device release action");
+        dev->dev_private = NULL;
+        drm_dev_put(dev);
+        goto failed_drm_alloc;
+    }
+#endif
 
     bus_is_pci =
 #if defined(NV_LINUX)
@@ -2305,6 +2331,11 @@ failed_drm_load:
 
     drm_dev_put(dev);
 
+#if defined(NV_DRM_DRM_MANAGED_H_PRESENT)
+    /* The release action freed nv_dev, unless a file still holds the device. */
+    return;
+#endif
+
 failed_drm_alloc:
 
     nv_drm_free(nv_dev);
@@ -2379,7 +2410,9 @@ static void nv_drm_dev_destroy(struct nv_drm_device *nv_dev)
 
     nv_drm_dev_unload(dev);
     drm_dev_put(dev);
+#if !defined(NV_DRM_DRM_MANAGED_H_PRESENT)
     nv_drm_free(nv_dev);
+#endif
 }
 
 /*
