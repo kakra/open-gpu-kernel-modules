@@ -274,6 +274,7 @@ enum NvKmsIoctlCommand {
     NVKMS_IOCTL_REGISTER_VBLANK_INTR_CALLBACK,
     NVKMS_IOCTL_UNREGISTER_VBLANK_INTR_CALLBACK,
     NVKMS_IOCTL_GET_NEXT_EVENTS,
+    NVKMS_IOCTL_MST_I2C_TRANSFER,
 };
 
 
@@ -4534,5 +4535,29 @@ struct NvKmsUnregisterVblankIntrCallbackParams {
     struct NvKmsUnregisterVblankIntrCallbackReply reply;     /*! out */
 };
 
+
+/* Each phase holds the normal NVKMS ioctl/PM locks; waits do not. */
+enum NvKmsMstI2cOperation {
+    NVKMS_MST_I2C_START,
+    NVKMS_MST_I2C_POLL,
+    NVKMS_MST_I2C_CANCEL,
+};
+struct NvKmsMstI2cTransferRequest {
+    enum NvKmsMstI2cOperation operation;
+    NvU64 requestId NV_ALIGN_BYTES(8);
+    NvKmsDeviceHandle deviceHandle;
+    NvKmsDispHandle dispHandle;
+    NVDpyId dpyId;
+    struct NvKmsMstI2cTransfer transfer;
+};
+struct NvKmsMstI2cTransferReply {
+    NvU64 requestId NV_ALIGN_BYTES(8);
+    NvBool complete;
+    NvU8 readData[NVKMS_MST_I2C_MAX_DATA];
+};
+struct NvKmsMstI2cTransferParams {
+    struct NvKmsMstI2cTransferRequest request;
+    struct NvKmsMstI2cTransferReply reply;
+};
 
 #endif /* NVKMS_API_H */

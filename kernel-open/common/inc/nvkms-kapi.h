@@ -1749,6 +1749,11 @@ struct NvKmsKapiFunctionsTable {
         NvU32 *pMaxBpc,
         NvBool *pLimited
     );
+
+    /* One bounded MST I2C transfer; serialized with modesetting and PM. */
+    NvBool (*mstI2cTransfer)(struct NvKmsKapiDevice *device,
+                             NvKmsKapiDisplay display,
+                             struct NvKmsMstI2cTransfer *transfer);
 };
 
 /** @} */
