@@ -3308,12 +3308,29 @@ failed:
  * hasn't been handled yet, hold the event until it is.
  *
  * Flips that may happen later than that are left without a submit time and
- * reported at the current vblank like before: tearing flips, flips waiting
- * on an unsignaled acquire fence, and flips with VRR enabled (see
- * nv_drm_crtc_set_vblank_duration()).
+ * reported at the current vblank like before: tearing flips and flips waiting
+ * on an unsignaled acquire fence.
+ *
+ * With VRR, the raster stops at the end of the front porch after each scanout
+ * and waits for a flip. A vblank timestamp assumes a blanking interval of the
+ * mode's length, so while the raster waits it is too early by as long as the
+ * wait lasted. A flip that arrives during the wait restarts the raster right
+ * away, so its first active line is the time the flip was kicked off plus the
+ * rest of the blanking interval. A flip that arrives during the scanout
+ * happens at the next vblank without a wait, and is reported at that vblank
+ * like at a fixed refresh rate. So is a flip whose event took longer than
+ * NV_DRM_VRR_FLIP_RESTART_EVENT_NS: it didn't restart the raster, so it arrived
+ * during a scanout the panel's minimum refresh rate forced without a flip,
+ * which aren't known here otherwise.
  */
 
 #define NV_DRM_PENDING_FLIP_EVENTS_TIMEOUT_MS 50
+
+/*
+ * The event of a flip that restarted the raster arrives within about 300 us of
+ * the kick; one latched at the end of a scanout usually takes milliseconds.
+ */
+#define NV_DRM_VRR_FLIP_RESTART_EVENT_NS 500000ULL
 
 static void __nv_drm_crtc_send_flip_event_at(struct drm_crtc *crtc,
                                              struct drm_pending_vblank_event *e,
@@ -3339,6 +3356,8 @@ static void __nv_drm_crtc_send_flip_events_at(struct nv_drm_crtc *nv_crtc,
                                               u64 count, NvU64 time)
 {
     struct nv_drm_flip *nv_deferred_flip, *nv_next_deferred_flip;
+
+    nv_crtc->last_flip_first_active = time;
 
     if (nv_flip->event != NULL) {
         __nv_drm_crtc_send_flip_event_at(&nv_crtc->base, nv_flip->event,
@@ -3486,6 +3505,41 @@ static void __nv_drm_crtc_process_pending_flip_events(struct nv_drm_crtc *nv_crt
 }
 
 /*
+ * Find when a VRR flip is scanned out, see the comment above
+ * __nv_drm_crtc_send_flip_event_at(). Returns false if the flip happens at a
+ * vblank that hasn't been handled yet. Called with dev->event_lock and
+ * dev->vblank_time_lock held.
+ */
+static bool __nv_drm_crtc_find_vrr_flip_time(struct nv_drm_crtc *nv_crtc,
+                                             const struct nv_drm_flip *nv_flip,
+                                             u64 *count, NvU64 *time)
+{
+    NvU64 kick_time = READ_ONCE(nv_flip->kick_time);
+
+    if (nv_crtc->vblank_history_len > 0 &&
+        __nv_drm_crtc_find_flip_vblank(nv_crtc, nv_flip, count, time)) {
+        return true;
+    }
+
+    /* The event can be handled before applyModeSetConfig() returns */
+    if (kick_time == 0 || kick_time > nv_flip->event_time) {
+        kick_time = nv_flip->event_time;
+    }
+
+    /* A scanout is still running: wait for its vblank */
+    if (kick_time < nv_crtc->last_flip_first_active +
+                    nv_crtc->vblank_active_ns ||
+        nv_flip->event_time - kick_time > NV_DRM_VRR_FLIP_RESTART_EVENT_NS) {
+        return false;
+    }
+
+    *count = drm_crtc_vblank_count(&nv_crtc->base);
+    *time = kick_time + nv_crtc->vblank_restart_to_active_ns;
+
+    return true;
+}
+
+/*
  * Called with dev->event_lock held, after nv_flip has been dequeued from the
  * flip list. Returns false if the caller should send the flip's events
  * itself (e.g. vblank interrupts aren't running, or the flip isn't tied to
@@ -3511,13 +3565,26 @@ bool nv_drm_crtc_handle_flip_events(struct nv_drm_crtc *nv_crtc,
     nv_flip->event_time = event_time;
 
     spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
-    usable = nv_crtc->vblank_intr_fired &&
-             nv_crtc->vblank_history_len > 0 &&
-             nv_crtc->vblank_duration_ns != 0 &&
-             READ_ONCE(nv_flip->submit_time) != 0;
-    if (usable) {
-        found = __nv_drm_crtc_find_flip_vblank(nv_crtc, nv_flip,
-                                               &count, &time);
+    if (nv_flip->vrr) {
+        /* Flips waiting on an acquire fence happened about now */
+        if (READ_ONCE(nv_flip->submit_time) == 0) {
+            WRITE_ONCE(nv_flip->submit_time, event_time);
+        }
+        usable = nv_crtc->vblank_duration_ns != 0 &&
+                 nv_crtc->vblank_active_ns != 0;
+        if (usable) {
+            found = __nv_drm_crtc_find_vrr_flip_time(nv_crtc, nv_flip,
+                                                     &count, &time);
+        }
+    } else {
+        usable = nv_crtc->vblank_intr_fired &&
+                 nv_crtc->vblank_history_len > 0 &&
+                 nv_crtc->vblank_duration_ns != 0 &&
+                 READ_ONCE(nv_flip->submit_time) != 0;
+        if (usable) {
+            found = __nv_drm_crtc_find_flip_vblank(nv_crtc, nv_flip,
+                                                   &count, &time);
+        }
     }
     spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
 
@@ -3636,7 +3703,7 @@ void nv_drm_crtc_set_vblank_duration(struct nv_drm_crtc *nv_crtc,
     struct drm_device *dev = nv_crtc->base.dev;
     const struct drm_display_mode *mode = &crtc_state->adjusted_mode;
     unsigned long irqflags;
-    NvU64 duration = 0, period = 0;
+    NvU64 duration = 0, period = 0, active = 0, restart_to_active = 0;
 
     if (mode->clock > 0 && mode->vtotal > mode->vdisplay) {
         /* mode->clock is in kHz */
@@ -3644,22 +3711,17 @@ void nv_drm_crtc_set_vblank_duration(struct nv_drm_crtc *nv_crtc,
                            mode->htotal * 1000000ULL, mode->clock);
         period = div_u64((u64)mode->vtotal * mode->htotal * 1000000ULL,
                          mode->clock);
+        active = div_u64((u64)mode->vdisplay * mode->htotal * 1000000ULL,
+                         mode->clock);
+        restart_to_active = div_u64((u64)(mode->vtotal - mode->vsync_start) *
+                                    mode->htotal * 1000000ULL, mode->clock);
     }
-
-#if defined(NV_DRM_CRTC_STATE_HAS_VRR_ENABLED)
-    /*
-     * With VRR the blanking interval stretches until a flip arrives, so the
-     * mode's vblank length doesn't tell when the vblank a flip ended started.
-     * A zero duration makes flip events use the current vblank instead.
-     */
-    if (crtc_state->vrr_enabled) {
-        duration = 0;
-    }
-#endif
 
     spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
     nv_crtc->vblank_duration_ns = duration;
     nv_crtc->vblank_period_ns = period;
+    nv_crtc->vblank_active_ns = active;
+    nv_crtc->vblank_restart_to_active_ns = restart_to_active;
     spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
 }
 
