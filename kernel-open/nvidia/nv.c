@@ -4809,6 +4809,13 @@ static int nv_pm_notifier(struct notifier_block *nb, unsigned long event, void *
     status = nv_set_system_power_state(power_state, nv_procfs_pm_action_depth);
     if (status != NV_OK) {
         nv_printf(NV_DBG_ERRORS, "NVRM: PM %s notifier failed: 0x%x\n", name, status);
+
+        /* A notifier that fails isn't called for PM_POST_HIBERNATION. */
+        if (event == PM_HIBERNATION_PREPARE)
+        {
+            WRITE_ONCE(nv_hibernation_in_progress, NV_FALSE);
+        }
+
         return NOTIFY_BAD;
     }
 
