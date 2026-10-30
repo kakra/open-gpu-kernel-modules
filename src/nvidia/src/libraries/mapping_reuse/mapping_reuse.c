@@ -234,6 +234,9 @@ reusemappingdbMap
     NvBool bAddToMap = !bNoReuse;
     NV_STATUS status = NV_OK;
 
+    pMemoryArea->pRanges = NULL;
+    pMemoryArea->numRanges = 0;
+
     // TODO: Remove when we support multi-range reuse
     NV_ASSERT_OR_RETURN( bSingleRange || bNoReuse, NV_ERR_NOT_SUPPORTED);
 
@@ -271,11 +274,11 @@ reusemappingdbMap
                     // Only return exact match
                     if (physRange.start == range.start && physRange.size == range.size)
                     {
-                        pMemoryArea->numRanges = 1;
-                        pEntry->refCount++;
                         pMemoryArea->pRanges = PORT_ALLOC(pReuseMappingDb->pAllocator, sizeof(MemoryRange));
                         NV_ASSERT_OR_RETURN(pMemoryArea->pRanges != NULL, NV_ERR_NO_MEMORY);
                         pMemoryArea->pRanges[0] = mrangeMake(virtualOffset, range.size);
+                        pMemoryArea->numRanges = 1;
+                        pEntry->refCount++;
                         return NV_OK;
                     }
                 }
@@ -296,7 +299,7 @@ reusemappingdbMap
     token.pList = NULL;
 
     // Get new mappings, added to linked list
-    NV_ASSERT_OK_OR_GOTO(status, pReuseMappingDb->pMapCb(pReuseMappingDb->pGlobalCtx, pAllocCtx,
+    NV_CHECK_OK_OR_GOTO(status, LEVEL_INFO, pReuseMappingDb->pMapCb(pReuseMappingDb->pGlobalCtx, pAllocCtx,
                                      range, cachingFlags, &token, _reusemappingdbAddMappingCallback), err_unmap);
     
     pMemoryArea->pRanges = PORT_ALLOC(pReuseMappingDb->pAllocator, sizeof(MemoryRange) * token.numNewEntries);
