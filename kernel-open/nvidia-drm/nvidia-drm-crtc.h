@@ -79,6 +79,21 @@ struct nv_drm_crtc {
     NvU64 vblank_period_ns;
 
     /*
+     * With VRR the raster waits at the end of the front porch until a flip
+     * arrives, see nv_drm_crtc_handle_flip_events(). These are the length of
+     * the active scanout, and the time from the end of that wait to the first
+     * active line. Protected by dev->vblank_time_lock.
+     */
+    NvU64 vblank_active_ns;
+    NvU64 vblank_restart_to_active_ns;
+
+    /*
+     * First active line of the last flip whose event was sent, and with it
+     * when its scanout ends. Protected by dev->event_lock.
+     */
+    NvU64 last_flip_first_active;
+
+    /*
      * Flips whose completion event arrived before the vblank they happened
      * at was handled; their DRM events are sent from the vblank callback.
      * Protected by dev->event_lock.
@@ -98,6 +113,13 @@ struct nv_drm_crtc {
      * timestamp is stale.
      */
     bool vblank_intr_fired;
+
+    /*
+     * NVKMS reported VRR active for a flip on this CRTC, and the
+     * VRR_ENABLED property has stayed set since. Only used from commits,
+     * which the CRTC's modeset lock serializes.
+     */
+    bool vrr_active;
 
     /**
      * @flip_list:
@@ -216,6 +238,15 @@ struct nv_drm_flip {
      * flip happened before this. Protected by &drm_device.event_lock.
      */
     NvU64 event_time;
+
+    /*
+     * @vrr:
+     *
+     * The raster may be waiting for this flip, so the vblank timestamps
+     * don't tell when it is scanned out. See
+     * nv_drm_crtc_handle_flip_events().
+     */
+    bool vrr;
 };
 
 struct nv_drm_crtc_state {
