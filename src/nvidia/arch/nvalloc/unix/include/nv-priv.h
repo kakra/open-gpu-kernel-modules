@@ -83,6 +83,7 @@ typedef struct nv_i2c_adapter_entry_s
     void  *pOsAdapter;
     NvU32  port;
     NvU32  displayId[MAX_DISP_ID_PER_ADAPTER];
+    NvU32  lastGoodDispIdIndex;
 } nv_i2c_adapter_entry_t;
 
 #define NV_INIT_FLAG_HAL                  0x0001

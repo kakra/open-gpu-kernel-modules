@@ -4012,7 +4012,159 @@ NvBool NV_API_CALL rm_is_supported_pci_device(
 /*
  * Performs the I2C transfers which are related with DP AUX channel
  */
-static NV_STATUS RmDpAuxI2CTransfer
+//
+// Retries of one AUX transaction. A sink can defer for as long as it takes to
+// move the data over a slow I2C bus. All of this runs with the API and GPU locks
+// held: an AUX timeout means no sink, which DDC clients scan for on every
+// connector, so it must not hold them for long.
+//
+#define RM_DP_AUX_I2C_MAX_DEFERS   16
+#define RM_DP_AUX_I2C_MAX_TIMEOUTS 3
+
+/*
+ * Performs an I2C transfer over the DP AUX channel, split into AUX transactions.
+ * The middle-of-transaction bit stays set between them and, if bit 0 of command
+ * is set, after the last one, so that the next message of the same I2C transfer
+ * continues the transaction with a repeated start. A zero length message is an
+ * address-only transaction.
+ */
+static NV_STATUS RmDpAuxI2CTransferChunked
+(
+    nv_state_t  *pNv,
+    NvU32       displayId,
+    NvU8        addr,
+    NvU8        command,
+    NvU32       len,
+    NvU8       *pData,
+    NvBool      bWrite
+)
+{
+    NV0073_CTRL_DP_AUXCH_CTRL_PARAMS *pParams;
+    RM_API    *pRmApi   = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+    NV_STATUS  status   = NV_OK;
+    NvU32      done     = 0;
+    NvU32      defers   = 0;
+    NvU32      timeouts = 0;
+
+    pParams = portMemAllocNonPaged(sizeof(*pParams));
+    if (pParams == NULL)
+    {
+        return NV_ERR_NO_MEMORY;
+    }
+
+    for (;;)
+    {
+        const NvU32 chunk = NV_MIN(len - done, NV0073_CTRL_DP_AUXCH_MAX_DATA_SIZE);
+        NvU32 completed = 0;
+        NvBool bDefer = NV_FALSE;
+
+        portMemSet(pParams, 0, sizeof(*pParams));
+
+        pParams->subDeviceInstance = 0;
+        pParams->displayId         = displayId;
+        pParams->addr              = addr;
+        pParams->bAddrOnly         = (chunk == 0);
+        pParams->size              = (chunk > 0) ? (chunk - 1) : 0; // 0-based on input
+        pParams->cmd               = DRF_DEF(0073_CTRL, _DP, _AUXCH_CMD_TYPE, _I2C);
+
+        if (((done + chunk) < len) || (command & 0x1))
+        {
+            pParams->cmd |= DRF_DEF(0073_CTRL, _DP, _AUXCH_CMD_I2C_MOT, _TRUE);
+        }
+
+        if (bWrite)
+        {
+            pParams->cmd |= DRF_DEF(0073_CTRL, _DP, _AUXCH_CMD_REQ_TYPE, _WRITE);
+            if (chunk > 0)
+            {
+                portMemCopy(pParams->data, sizeof(pParams->data), pData + done, chunk);
+            }
+        }
+        else
+        {
+            pParams->cmd |= DRF_DEF(0073_CTRL, _DP, _AUXCH_CMD_REQ_TYPE, _READ);
+        }
+
+        status = pRmApi->Control(pRmApi, pNv->rmapi.hClient, pNv->rmapi.hDisp,
+                                 NV0073_CTRL_CMD_DP_AUXCH_CTRL,
+                                 pParams, sizeof(*pParams));
+
+        if (status == NV_ERR_TIMEOUT)
+        {
+            if (++timeouts >= RM_DP_AUX_I2C_MAX_TIMEOUTS)
+            {
+                break;
+            }
+            (void)osDelay(1);
+            continue;
+        }
+        else if (status != NV_OK)
+        {
+            break;
+        }
+        else if (pParams->replyType == NV0073_CTRL_DP_AUXCH_REPLYTYPE_ACK)
+        {
+            completed = NV_MIN(pParams->size, chunk);
+
+            if (bWrite && (completed == 0))
+            {
+                // Only a partial write reports a count: no count is all of it.
+                completed = chunk;
+            }
+            else if (!bWrite)
+            {
+                if (completed > 0)
+                {
+                    portMemCopy(pData + done, len - done, pParams->data, completed);
+                }
+                else if (chunk > 0)
+                {
+                    // It is valid for a sink to have no data ready yet.
+                    bDefer = NV_TRUE;
+                }
+            }
+        }
+        else if ((pParams->replyType == NV0073_CTRL_DP_AUXCH_REPLYTYPE_DEFER) ||
+                 (pParams->replyType == NV0073_CTRL_DP_AUXCH_REPLYTYPE_I2CDEFER))
+        {
+            bDefer = NV_TRUE;
+        }
+        else
+        {
+            status = NV_ERR_GENERIC;
+            break;
+        }
+
+        if (bDefer)
+        {
+            if (++defers > RM_DP_AUX_I2C_MAX_DEFERS)
+            {
+                status = NV_ERR_TIMEOUT;
+                break;
+            }
+            (void)osDelay(1);
+            continue;
+        }
+
+        defers = 0;
+        timeouts = 0;
+        done += completed;
+
+        if (done >= len)
+        {
+            break;
+        }
+    }
+
+    portMemFree(pParams);
+
+    return status;
+}
+
+/*
+ * Performs an I2C transfer with the single control made for it.
+ */
+static NV_STATUS RmDpAuxI2CTransferCtrl
 (
     nv_state_t  *pNv,
     NvU32       displayId,
@@ -4025,14 +4177,6 @@ static NV_STATUS RmDpAuxI2CTransfer
     NV0073_CTRL_DP_AUXCH_I2C_TRANSFER_CTRL_PARAMS *pParams;
     RM_API    *pRmApi   = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
     NV_STATUS  status;
-
-    if (len > NV0073_CTRL_DP_AUXCH_I2C_TRANSFER_MAX_DATA_SIZE)
-    {
-        NV_PRINTF(LEVEL_ERROR,
-                  "%s: requested I2C transfer length %u is greater than maximum supported length %u\n",
-                  __FUNCTION__, len, NV0073_CTRL_DP_AUXCH_I2C_TRANSFER_MAX_DATA_SIZE);
-        return NV_ERR_NOT_SUPPORTED;
-    }
 
     pParams = portMemAllocNonPaged(sizeof(*pParams));
     if (pParams == NULL)
@@ -4066,6 +4210,31 @@ static NV_STATUS RmDpAuxI2CTransfer
     portMemFree(pParams);
 
     return status;
+}
+
+/*
+ * The control for I2C transfers works with DDC sinks that are picky about their
+ * timing, but fails every transfer on some outputs, such as USB-C on Optimus
+ * laptops. Fall back to chunked AUX transactions for those.
+ */
+static NV_STATUS RmDpAuxI2CTransfer
+(
+    nv_state_t  *pNv,
+    NvU32       displayId,
+    NvU8        addr,
+    NvU8        command,
+    NvU32       len,
+    NvU8       *pData,
+    NvBool      bWrite
+)
+{
+    if ((len <= NV0073_CTRL_DP_AUXCH_I2C_TRANSFER_MAX_DATA_SIZE) &&
+        (RmDpAuxI2CTransferCtrl(pNv, displayId, addr, len, pData, bWrite) == NV_OK))
+    {
+        return NV_OK;
+    }
+
+    return RmDpAuxI2CTransferChunked(pNv, displayId, addr, command, len, pData, bWrite);
 }
 
 /*
@@ -4225,7 +4394,7 @@ NV_STATUS NV_API_CALL rm_i2c_transfer(
     NvBool     unlockGpu = NV_FALSE;
     NvU32      x;
     void      *fp;
-    NvU32      numDispId = 0;
+    NvU32      n;
 
     NV_ENTER_RM_RUNTIME(sp,fp);
     threadStateInit(&threadState, THREAD_STATE_FLAGS_NONE);
@@ -4267,8 +4436,14 @@ NV_STATUS NV_API_CALL rm_i2c_transfer(
         goto finish;
     }
 
-    for (numDispId = 0; numDispId < MAX_DISP_ID_PER_ADAPTER; numDispId++)
+    //
+    // The adapter of a DP port also has the regular I2C path, which takes about
+    // 20 ms to fail with the locks held. Start from the one that worked last.
+    //
+    for (n = 0; n < MAX_DISP_ID_PER_ADAPTER; n++)
     {
+        NvU32 numDispId = (pNvp->i2c_adapters[x].lastGoodDispIdIndex + n) %
+                          MAX_DISP_ID_PER_ADAPTER;
         NvU32 displayId = pNvp->i2c_adapters[x].displayId[numDispId];
 
         if (displayId == INVALID_DISP_ID)
@@ -4290,12 +4465,13 @@ NV_STATUS NV_API_CALL rm_i2c_transfer(
                 goto semafinish;
             }
 
-            rmStatus = RmDpAuxI2CTransfer(pNv, displayId, addr, len, pData,
+            rmStatus = RmDpAuxI2CTransfer(pNv, displayId, addr, command, len, pData,
                                           type == NV_I2C_CMD_WRITE);
         }
 semafinish:
         if (rmStatus == NV_OK)
         {
+            pNvp->i2c_adapters[x].lastGoodDispIdIndex = numDispId;
             break;
         }
     }
@@ -4408,6 +4584,7 @@ void RmI2cAddGpuPorts(nv_state_t * pNv)
         {
             pNvp->i2c_adapters[x].displayId[numDispId] = INVALID_DISP_ID;
         }
+        pNvp->i2c_adapters[x].lastGoodDispIdIndex = 0;
     }
 
     // First, set up the regular i2c adapters - one per i2c port
