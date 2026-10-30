@@ -74,6 +74,8 @@ extern bool nv_drm_color_pipeline_module_param;
 extern bool nv_drm_deadline_boost_module_param;
 /* Set to true when connectors get the "scaling mode" and underscan properties. */
 extern bool nv_drm_scaling_mode_module_param;
+/* Set to true when VRR flip events report when the flip is scanned out. */
+extern bool nv_drm_vrr_flip_timestamps_module_param;
 
 void *nv_drm_calloc(size_t nmemb, size_t size);
 

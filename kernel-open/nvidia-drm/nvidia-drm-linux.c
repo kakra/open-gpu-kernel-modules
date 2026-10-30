@@ -67,6 +67,12 @@ MODULE_PARM_DESC(
     "the display scaler (1 = enable (default), 0 = disable)");
 module_param_named(scaling_mode, nv_drm_scaling_mode_module_param, bool, 0444);
 
+MODULE_PARM_DESC(
+    vrr_flip_timestamps,
+    "Report when VRR page flips are scanned out instead of the last vblank "
+    "(1 = enable (default), 0 = disable)");
+module_param_named(vrr_flip_timestamps, nv_drm_vrr_flip_timestamps_module_param, bool, 0644);
+
 #endif /* NV_DRM_AVAILABLE */
 
 /*************************************************************************
