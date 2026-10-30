@@ -4159,20 +4159,22 @@ bool ConnectorImpl::needToEnableFEC(const DpPreModesetParams &params)
 
 void ConnectorImpl::dpPreModeset(const DpPreModesetParams &params)
 {
-    if(!connectorActive || (bIsDiscoveryDetectActive || !isDiscoveryDetectComplete))
+    if(!connectorActive)
     {
-        DP_ASSERT(0 && "DPCONN> dpPreModeset called when connector is not active or when detection is in progress!");
+        DP_ASSERT(0 && "DPCONN> dpPreModeset called when connector is not active!");
         return;
     }
 
     //
     // NVKMS funnels both attach and detach through this entry point. A detach
-    // that arrives after HPD de-assert has to be let through, otherwise DPLib
-    // stream state is left stale while the client clears its head mask. Attach
-    // stays gated on plug state; DDS panels are never gated on HPD.
+    // that arrives after HPD de-assert or during detection has to be let
+    // through, otherwise DPLib stream state is left stale while the client
+    // clears its head mask. Attach stays gated on detection and plug state;
+    // DDS panels are never gated on HPD.
     //
-    bool  bAttachAllowed = previousPlugged || bClientForcedConnected ||
-                           main->isInternalPanelDynamicMuxCapable();
+    bool  bAttachAllowed = !bIsDiscoveryDetectActive && isDiscoveryDetectComplete &&
+                           (previousPlugged || bClientForcedConnected ||
+                            main->isInternalPanelDynamicMuxCapable());
     NvU32 attachHeadMask = 0x0;
     NvU32 detachHeadMask = 0x0;
 
@@ -4191,7 +4193,7 @@ void ConnectorImpl::dpPreModeset(const DpPreModesetParams &params)
     {
         if (detachHeadMask == 0x0)
         {
-            DP_ASSERT(0 && "DPCONN> dpPreModeset called when Plugged State is false!");
+            DP_ASSERT(0 && "DPCONN> dpPreModeset called when detection is in progress or Plugged State is false!");
             return;
         }
 
@@ -4203,7 +4205,7 @@ void ConnectorImpl::dpPreModeset(const DpPreModesetParams &params)
             // perHeadAttachedGroup from recording an attach that DPLib never
             // completed, which a later detach would otherwise act on.
             //
-            DP_PRINTF(DP_ERROR, "DPCONN> dpPreModeset skipping attach on headMask 0x%x, Plugged State is false!",
+            DP_PRINTF(DP_ERROR, "DPCONN> dpPreModeset skipping attach on headMask 0x%x, detection is in progress or Plugged State is false!",
                       attachHeadMask);
         }
     }
@@ -4723,9 +4725,9 @@ void ConnectorImpl::notifyAttachEnd(bool modesetCancelled)
 // Notify library before/after shutdown (update)
 void ConnectorImpl::notifyDetachBegin(Group * target)
 {
-    if(!connectorActive || (bIsDiscoveryDetectActive || !isDiscoveryDetectComplete))
+    if(!connectorActive)
     {
-        DP_ASSERT(0 && "DPCONN> notifyDetachBegin called when connector is not active or when detection is in progress!");
+        DP_ASSERT(0 && "DPCONN> notifyDetachBegin called when connector is not active!");
         return;
     }
 
@@ -4799,9 +4801,9 @@ void ConnectorImpl::notifyDetachBegin(Group * target)
 //
 void ConnectorImpl::notifyDetachEnd(bool bKeepOdAlive, bool bKeepLinkOn)
 {
-    if(!connectorActive || (bIsDiscoveryDetectActive || !isDiscoveryDetectComplete))
+    if(!connectorActive)
     {
-        DP_ASSERT(0 && "DPCONN> notifyDetachEnd called when connector is not active or when detection is in progress!");
+        DP_ASSERT(0 && "DPCONN> notifyDetachEnd called when connector is not active!");
         return;
     }
 
