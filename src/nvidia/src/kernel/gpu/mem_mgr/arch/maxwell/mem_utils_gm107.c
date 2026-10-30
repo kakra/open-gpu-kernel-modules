@@ -576,7 +576,7 @@ memmgrMemUtilsChannelInitialize_GM107
             pChannel->vaStartOffset = vaStartOffset;
         }
 
-        if (rmDeviceGpuLockIsOwner(pGpu->gpuInstance))
+        if (rmDeviceGpuLockIsOwner(pGpu->gpuInstance) && !rmapiInRtd3PmPath())
         {
             rmGpuLocksRelease(GPUS_LOCK_FLAGS_NONE, NULL);
             bAcquireLock = NV_TRUE;
