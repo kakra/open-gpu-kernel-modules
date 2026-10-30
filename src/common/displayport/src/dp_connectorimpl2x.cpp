@@ -1611,9 +1611,9 @@ bool ConnectorImpl2x::train(const LinkConfiguration &lConfig, bool force, LinkTr
  */
 void ConnectorImpl2x::notifyDetachBegin(Group *target)
 {
-    if(!connectorActive || (bIsDiscoveryDetectActive || !isDiscoveryDetectComplete))
+    if(!connectorActive)
     {
-        DP_ASSERT(0 && "DPCONN> notifyDetachBegin called when connector is not active or when detection is in progress!");
+        DP_ASSERT(0 && "DPCONN> notifyDetachBegin called when connector is not active!");
         return;
     }
 
@@ -1661,9 +1661,9 @@ void ConnectorImpl2x::notifyDetachBegin(Group *target)
 
 void ConnectorImpl2x::notifyDetachEnd(bool bKeepOdAlive, bool bKeepLinkOn)
 {
-    if(!connectorActive || (bIsDiscoveryDetectActive || !isDiscoveryDetectComplete))
+    if(!connectorActive)
     {
-        DP_ASSERT(0 && "DPCONN> notifyDetachEnd called when connector is not active or when detection is in progress!");
+        DP_ASSERT(0 && "DPCONN> notifyDetachEnd called when connector is not active!");
         return;
     }
 
