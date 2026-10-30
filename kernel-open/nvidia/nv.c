@@ -203,6 +203,7 @@ struct semaphore nv_system_power_state_lock;
  * a hibernation image and quiesces its devices before jumping into it.
  */
 static NvBool nv_restoring_hibernation_image;
+static NvBool nv_hibernation_in_progress;
 
 #include <linux/suspend.h>
 
@@ -4748,6 +4749,15 @@ static int nv_pm_notifier(struct notifier_block *nb, unsigned long event, void *
     nv_power_state_t power_state;
     const char *name;
 
+    if (event == PM_HIBERNATION_PREPARE)
+    {
+        WRITE_ONCE(nv_hibernation_in_progress, NV_TRUE);
+    }
+    else if (event == PM_POST_HIBERNATION)
+    {
+        WRITE_ONCE(nv_hibernation_in_progress, NV_FALSE);
+    }
+
     if (!NVreg_UseKernelSuspendNotifiers &&
         (event != PM_RESTORE_PREPARE) && (event != PM_POST_RESTORE))
     {
@@ -5338,7 +5348,8 @@ nv_system_pm_transition_pending(void)
     NvBool pending;
 
     down(&nv_system_power_state_lock);
-    pending = (nv_system_power_state != NV_POWER_STATE_RUNNING);
+    pending = (nv_system_power_state != NV_POWER_STATE_RUNNING) ||
+              READ_ONCE(nv_hibernation_in_progress);
     up(&nv_system_power_state_lock);
 
     return pending;
@@ -5382,11 +5393,22 @@ int nv_pmops_freeze(
     return (status == NV_OK) ? 0 : -EIO;
 }
 
+/*
+ * Undo nv_pmops_freeze(). The kernel keeps running after thaw in hybrid
+ * sleep, when writing the hibernation image fails and when the boot kernel
+ * fails to restore an image. If freeze only nested on a suspend done earlier
+ * by the PM notifier or procfs, this drops that nested count so the final
+ * resume from that path really resumes the GPU. If freeze suspended the GPU
+ * itself, this resumes it.
+ */
 int nv_pmops_thaw(
     struct device *dev
 )
 {
-    return 0;
+    NV_STATUS status;
+
+    status = nvidia_resume(dev, NV_PM_ACTION_RESUME);
+    return (status == NV_OK) ? 0 : -EIO;
 }
 
 int nv_pmops_restore(
@@ -5399,11 +5421,22 @@ int nv_pmops_restore(
     return (status == NV_OK) ? 0 : -EIO;
 }
 
+/*
+ * Pairs with nv_pmops_restore() when entering the platform sleep state fails
+ * after poweroff and the PM core rolls back with restore callbacks.
+ */
 int nv_pmops_poweroff(
     struct device *dev
 )
 {
-    return 0;
+    NV_STATUS status;
+
+    status = nvidia_suspend(dev, NV_PM_ACTION_HIBERNATE, NV_FALSE);
+
+    if (status != NV_OK)
+        nvidia_resume(dev, NV_PM_ACTION_RESUME);
+
+    return (status == NV_OK) ? 0 : -EIO;
 }
 
 static int
