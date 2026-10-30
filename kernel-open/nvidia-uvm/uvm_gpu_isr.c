@@ -452,8 +452,11 @@ NV_STATUS uvm_parent_gpu_init_isr(uvm_parent_gpu_t *parent_gpu)
 
 void uvm_parent_gpu_flush_bottom_halves(uvm_parent_gpu_t *parent_gpu)
 {
-    nv_kthread_q_flush(&parent_gpu->isr.bottom_half_q);
-    nv_kthread_q_flush(&parent_gpu->isr.kill_channel_q);
+    if (parent_gpu->isr.replayable_faults.handling)
+        nv_kthread_q_flush(&parent_gpu->isr.bottom_half_q);
+
+    if (parent_gpu->isr.non_replayable_faults.handling)
+        nv_kthread_q_flush(&parent_gpu->isr.kill_channel_q);
 }
 
 void uvm_parent_gpu_disable_isr(uvm_parent_gpu_t *parent_gpu)
