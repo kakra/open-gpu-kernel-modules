@@ -32,6 +32,7 @@
 #include <drm/drm_prime.h>
 
 #include <linux/io.h>
+#include <linux/ratelimit.h>
 #if defined(NV_BSD)
 #include <vm/vm_pageout.h>
 #endif
@@ -642,6 +643,12 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
     struct nv_drm_gem_nvkms_memory *nv_nvkms_memory = NULL;
     struct NvKmsKapiMemory *pMemory;
     struct NvKmsKapiAllocateMemoryParams allocParams = { };
+    /*
+     * While video memory is full, a client may retry a failed allocation on
+     * every frame (Chrome does for video scanout buffers), which logged up to
+     * 60 messages per second.
+     */
+    static DEFINE_RATELIMIT_STATE(log_rs, 10 * HZ, 5);
     int ret = 0;
 
     if (!drm_core_check_feature(dev, DRIVER_MODESET)) {
@@ -678,29 +685,37 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
          * allocation can still fit. p->compressible is IN/OUT, so the caller
          * sees that compression wasn't granted.
          */
-        NV_DRM_DEV_LOG_INFO(
-                nv_dev,
-                "Failed to allocate compressible NVKMS video memory of size %" NvU64_fmtu " for GEM object, retrying without compression",
-                p->memory_size);
+        if (__ratelimit(&log_rs)) {
+            NV_DRM_DEV_LOG_INFO(
+                    nv_dev,
+                    "Failed to allocate compressible NVKMS video memory of size %" NvU64_fmtu " for GEM object of %s[%d], retrying without compression",
+                    p->memory_size, current->comm, task_pid_nr(current));
+        }
         p->compressible = 0;
         pMemory = nvKms->allocateMemory(nv_dev->pDevice, &allocParams);
     }
 
     if (pMemory == NULL && (p->flags & NV_GEM_ALLOC_NO_SCANOUT)) {
-        NV_DRM_DEV_LOG_INFO(
-                nv_dev,
-                "Failed to allocate NVKMS video memory for GEM object, trying to fall back to sysmem");
+        if (__ratelimit(&log_rs)) {
+            NV_DRM_DEV_LOG_INFO(
+                    nv_dev,
+                    "Failed to allocate NVKMS video memory for GEM object of %s[%d], trying to fall back to sysmem",
+                    current->comm, task_pid_nr(current));
+        }
         allocParams.useVideoMemory = false;
         pMemory = nvKms->allocateMemory(nv_dev->pDevice, &allocParams);
     }
 
     if (pMemory == NULL) {
         ret = -ENOMEM;
-        NV_DRM_DEV_LOG_ERR(nv_dev,
-                           "Failed to allocate NVKMS memory of size %" NvU64_fmtu " for %s GEM object",
-                           p->memory_size,
-                           (p->flags & NV_GEM_ALLOC_NO_SCANOUT) ?
-                               "offscreen" : "scanout");
+        if (__ratelimit(&log_rs)) {
+            NV_DRM_DEV_LOG_ERR(nv_dev,
+                               "Failed to allocate NVKMS memory of size %" NvU64_fmtu " for %s GEM object of %s[%d]",
+                               p->memory_size,
+                               (p->flags & NV_GEM_ALLOC_NO_SCANOUT) ?
+                                   "offscreen" : "scanout",
+                               current->comm, task_pid_nr(current));
+        }
         goto nvkms_alloc_memory_failed;
     }
 
