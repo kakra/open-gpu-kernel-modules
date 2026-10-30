@@ -9059,6 +9059,11 @@ NVDevEvoPtr nvAllocDevEvo(const struct NvKmsAllocDeviceRequest *pRequest,
         goto done;
     }
 
+    if (!nvHsAllocDevice(pDevEvo, pRequest)) {
+        status = NVKMS_ALLOC_DEVICE_STATUS_FATAL_ERROR;
+        goto done;
+    }
+
     if (!nvAllocLutSurfacesEvo(pDevEvo)) {
         nvEvoLogDev(pDevEvo, EVO_LOG_ERROR,
             "Failed to allocate memory for the display color lookup table.");
@@ -9079,11 +9084,6 @@ NVDevEvoPtr nvAllocDevEvo(const struct NvKmsAllocDeviceRequest *pRequest,
      * on the HW capabilities that are read in that function.
      */
     if (!ValidateConnectorTypes(pDevEvo)) {
-        status = NVKMS_ALLOC_DEVICE_STATUS_FATAL_ERROR;
-        goto done;
-    }
-
-    if (!nvHsAllocDevice(pDevEvo, pRequest)) {
         status = NVKMS_ALLOC_DEVICE_STATUS_FATAL_ERROR;
         goto done;
     }
