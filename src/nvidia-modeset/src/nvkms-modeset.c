@@ -845,6 +845,9 @@ static NvBool AssignProposedHwHeadsGeneric(
             if (!nvEvoUse2Heads1OR(
                     pDpyEvo,
                     &pProposedApiHead->timings,
+                    &pProposedApiHead->attributes.color,
+                    pProposedApiHead->colorFormatSpecified,
+                    pProposedApiHead->colorBpcSpecified,
                     &pProposedApiHead->modeValidationParams)) {
                 continue;
             }
@@ -854,6 +857,9 @@ static NvBool AssignProposedHwHeadsGeneric(
             nvAssert(!nvEvoUse2Heads1OR(
                         pDpyEvo,
                         &pProposedApiHead->timings,
+                        &pProposedApiHead->attributes.color,
+                        pProposedApiHead->colorFormatSpecified,
+                        pProposedApiHead->colorBpcSpecified,
                         &pProposedApiHead->modeValidationParams));
 
             NvU32 foundHead = GetFreeHeads(pDevEvo, apiHead, pDpyEvo,
@@ -922,6 +928,9 @@ void ClearIncompatibleHwHeadsMaskOneDisp(const NVDispEvoRec *pDispEvo,
         const NvBool new2Heads1OrState =
             nvEvoUse2Heads1OR(pDpyEvo,
                               &pProposedApiHead->timings,
+                              &pProposedApiHead->attributes.color,
+                              pProposedApiHead->colorFormatSpecified,
+                              pProposedApiHead->colorBpcSpecified,
                               &pProposedApiHead->modeValidationParams);
 
         if (new2Heads1OrState != current2Heads1OrState) {
