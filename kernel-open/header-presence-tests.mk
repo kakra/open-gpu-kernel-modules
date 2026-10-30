@@ -12,6 +12,7 @@ NV_HEADER_PRESENCE_TESTS = \
   drm/drm_fbdev_generic.h \
   drm/drm_fbdev_ttm.h \
   drm/drm_client_setup.h \
+  drm/drm_managed.h \
   drm/drm_probe_helper.h \
   drm/clients/drm_client_setup.h \
   drm/clients/drm_fbdev_helper.h \
