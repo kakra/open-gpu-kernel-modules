@@ -4271,15 +4271,60 @@ bool ConnectorImpl::needToEnableFEC(const DpPreModesetParams &params)
 
 void ConnectorImpl::dpPreModeset(const DpPreModesetParams &params)
 {
-    if(!connectorActive || (bIsDiscoveryDetectActive || !isDiscoveryDetectComplete))
+    if(!connectorActive)
     {
-        DP_ASSERT(0 && "DPCONN> dpPreModeset called when connector is not active or when detection is in progress!");
+        DP_ASSERT(0 && "DPCONN> dpPreModeset called when connector is not active!");
         return;
     }
 
-    DP_ASSERT((previousPlugged || bClientForcedConnected) && "DPCONN> dpPreModeset called when Plugged State is false!");
+    //
+    // NVKMS funnels both attach and detach through this entry point. A detach
+    // that arrives after HPD de-assert or during detection has to be let
+    // through, otherwise DPLib stream state is left stale while the client
+    // clears its head mask. Attach stays gated on detection and plug state;
+    // DDS panels are never gated on HPD.
+    //
+    bool  bAttachAllowed = !bIsDiscoveryDetectActive && isDiscoveryDetectComplete &&
+                           (previousPlugged || bClientForcedConnected ||
+                            main->isInternalPanelDynamicMuxCapable());
+    NvU32 attachHeadMask = 0x0;
+    NvU32 detachHeadMask = 0x0;
 
-    this->bFECEnable |= this->needToEnableFEC(params);
+    for (NvU32 i = 0; i < NV_MAX_HEADS; i++)
+    {
+        if ((params.headMask & NVBIT(i)) == 0x0)
+            continue;
+
+        if (params.head[i].pTarget != NULL)
+            attachHeadMask |= NVBIT(i);
+        else
+            detachHeadMask |= NVBIT(i);
+    }
+
+    if (!bAttachAllowed)
+    {
+        if (detachHeadMask == 0x0)
+        {
+            DP_ASSERT(0 && "DPCONN> dpPreModeset called when detection is in progress or Plugged State is false!");
+            return;
+        }
+
+        if (attachHeadMask != 0x0)
+        {
+            //
+            // notifyAttachBegin/notifyAttachEnd reject these anyway. Dropping them
+            // here too keeps bFECEnable, inTransitionHeadMask and
+            // perHeadAttachedGroup from recording an attach that DPLib never
+            // completed, which a later detach would otherwise act on.
+            //
+            DP_PRINTF(DP_ERROR, "DPCONN> dpPreModeset skipping attach on headMask 0x%x, detection is in progress or Plugged State is false!",
+                      attachHeadMask);
+        }
+    }
+    else
+    {
+        this->bFECEnable |= this->needToEnableFEC(params);
+    }
 
     DP_ASSERT(this->inTransitionHeadMask == 0x0);
     this->inTransitionHeadMask = 0x0;
@@ -4287,6 +4332,9 @@ void ConnectorImpl::dpPreModeset(const DpPreModesetParams &params)
     for (NvU32 i = 0; i < NV_MAX_HEADS; i++)
     {
         if ((params.headMask & NVBIT(i)) == 0x0)
+            continue;
+
+        if (!bAttachAllowed && ((attachHeadMask & NVBIT(i)) != 0x0))
             continue;
 
         this->inTransitionHeadMask |= NVBIT(i);
@@ -4852,9 +4900,9 @@ void ConnectorImpl::notifyAttachEnd(bool modesetCancelled)
 // Notify library before/after shutdown (update)
 void ConnectorImpl::notifyDetachBegin(Group * target)
 {
-    if(!connectorActive || (bIsDiscoveryDetectActive || !isDiscoveryDetectComplete))
+    if(!connectorActive)
     {
-        DP_ASSERT(0 && "DPCONN> notifyDetachBegin called when connector is not active or when detection is in progress!");
+        DP_ASSERT(0 && "DPCONN> notifyDetachBegin called when connector is not active!");
         return;
     }
 
@@ -4928,9 +4976,9 @@ void ConnectorImpl::notifyDetachBegin(Group * target)
 //
 void ConnectorImpl::notifyDetachEnd(bool bKeepOdAlive, bool bKeepLinkOn)
 {
-    if(!connectorActive || (bIsDiscoveryDetectActive || !isDiscoveryDetectComplete))
+    if(!connectorActive)
     {
-        DP_ASSERT(0 && "DPCONN> notifyDetachBegin called when connector is not active or when detection is in progress!");
+        DP_ASSERT(0 && "DPCONN> notifyDetachEnd called when connector is not active!");
         return;
     }
 
