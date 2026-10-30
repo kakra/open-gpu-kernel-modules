@@ -635,11 +635,41 @@ done:
     return ret;
 }
 
+#define NV_DRM_GEM_ALLOC_BACKOFF_MIN_MS 100
+#define NV_DRM_GEM_ALLOC_BACKOFF_MAX_MS 2000
+
+static void nv_drm_gem_alloc_failed(struct nv_drm_file *nv_file,
+                                    u64 size, bool scanout)
+{
+    unsigned int delay_ms = nv_file->gem_alloc_fail_delay_ms;
+
+    delay_ms = (delay_ms == 0) ? NV_DRM_GEM_ALLOC_BACKOFF_MIN_MS :
+               min(delay_ms * 2, (unsigned int)NV_DRM_GEM_ALLOC_BACKOFF_MAX_MS);
+
+    nv_file->gem_alloc_fail_size = size;
+    nv_file->gem_alloc_fail_scanout = scanout;
+    nv_file->gem_alloc_fail_delay_ms = delay_ms;
+    nv_file->gem_alloc_fail_until = jiffies + msecs_to_jiffies(delay_ms);
+}
+
+/*
+ * Whether an allocation of size bytes is at least as hard to satisfy as the
+ * last failed one of this file: not smaller, and scanout if that one was.
+ */
+static bool nv_drm_gem_alloc_covers_failed(const struct nv_drm_file *nv_file,
+                                           u64 size, bool scanout)
+{
+    return size >= nv_file->gem_alloc_fail_size &&
+           (scanout || !nv_file->gem_alloc_fail_scanout);
+}
+
 int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
                                         void *data, struct drm_file *filep)
 {
     struct nv_drm_device *nv_dev = to_nv_device(dev);
     struct drm_nvidia_gem_alloc_nvkms_memory_params *p = data;
+    struct nv_drm_file *nv_file = to_nv_drm_file(filep);
+    const bool scanout = !(p->flags & NV_GEM_ALLOC_NO_SCANOUT);
     struct nv_drm_gem_nvkms_memory *nv_nvkms_memory = NULL;
     struct NvKmsKapiMemory *pMemory;
     struct NvKmsKapiAllocateMemoryParams allocParams = { };
@@ -659,6 +689,22 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
     if ((p->__pad0 != 0) || (p->__pad1 != 0)) {
         ret = -EINVAL;
         NV_DRM_DEV_LOG_ERR(nv_dev, "non-zero value in padding field");
+        goto failed;
+    }
+
+    /*
+     * Each attempt searches video memory in NVKMS and RM under their locks,
+     * which stalls other clients such as a running game, and fails the same
+     * way as long as nothing was freed. Fail an allocation that is not
+     * smaller than the last failed one of this file right away until the
+     * back-off expires; it doubles with every failure and a success of such
+     * an allocation resets it. A failed scanout allocation doesn't hold back
+     * offscreen ones, which can still fall back to sysmem.
+     */
+    if (nv_file->gem_alloc_fail_size != 0 &&
+        nv_drm_gem_alloc_covers_failed(nv_file, p->memory_size, scanout) &&
+        time_before(jiffies, nv_file->gem_alloc_fail_until)) {
+        ret = -ENOMEM;
         goto failed;
     }
 
@@ -712,11 +758,22 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
             NV_DRM_DEV_LOG_ERR(nv_dev,
                                "Failed to allocate NVKMS memory of size %" NvU64_fmtu " for %s GEM object of %s[%d]",
                                p->memory_size,
-                               (p->flags & NV_GEM_ALLOC_NO_SCANOUT) ?
-                                   "offscreen" : "scanout",
+                               scanout ? "scanout" : "offscreen",
                                current->comm, task_pid_nr(current));
         }
+        nv_drm_gem_alloc_failed(nv_file, p->memory_size, scanout);
         goto nvkms_alloc_memory_failed;
+    }
+
+    /*
+     * Only a success that the back-off would have held back shows that
+     * memory was freed. A client that falls back to an offscreen or smaller
+     * buffer after each failed allocation would otherwise reset it every
+     * time and let every retry through again.
+     */
+    if (nv_drm_gem_alloc_covers_failed(nv_file, p->memory_size, scanout)) {
+        nv_file->gem_alloc_fail_size = 0;
+        nv_file->gem_alloc_fail_delay_ms = 0;
     }
 
     ret = __nv_drm_nvkms_gem_obj_init(nv_dev, nv_nvkms_memory, pMemory,

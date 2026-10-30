@@ -369,6 +369,16 @@ static inline struct nv_drm_device *to_nv_device(
 struct nv_drm_file {
     /* Returned by DRM_IOCTL_NVIDIA_GET_DRM_FILE_UNIQUE_ID */
     u64 id;
+
+    /*
+     * Back-off after a failed GEM allocation, see
+     * nv_drm_gem_alloc_nvkms_memory_ioctl(). Updated without a lock; a race
+     * between ioctls on the same file only shifts the back-off.
+     */
+    u64 gem_alloc_fail_size;
+    unsigned long gem_alloc_fail_until;
+    unsigned int gem_alloc_fail_delay_ms;
+    bool gem_alloc_fail_scanout;
 };
 
 /* A macro, struct drm_file is not defined in every file including this one */
