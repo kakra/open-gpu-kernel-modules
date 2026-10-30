@@ -42,7 +42,7 @@ else ifeq ($(ARCH), x86)
 else
     OFA_ARCH := $(ARCH)
 endif
-OFA_DIR := /usr/src/ofa_kernel
+OFA_DIR := $(if $(MLNX_OFED_KERNEL_DIR),$(MLNX_OFED_KERNEL_DIR),/usr/src/ofa_kernel)
 OFA_DKMS_DIR := $(OFA_DIR)-dkms
 OFA_CANDIDATES = $(OFA_DKMS_DIR)/$(OFA_ARCH)/$(KERNELRELEASE) $(OFA_DIR)/$(OFA_ARCH)/$(KERNELRELEASE) $(OFA_DIR)/$(KERNELRELEASE) $(OFA_DIR)/default
 MLNX_OFED_KERNEL := $(firstword $(wildcard $(OFA_CANDIDATES)))
