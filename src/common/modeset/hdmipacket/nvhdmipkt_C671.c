@@ -431,6 +431,9 @@ hdmiAssessLinkCapabilitiesC671(NVHDMIPKT_CLASS          *pThis,
     pSrcCaps->dscCaps.lineBufferBitDepth  = params.DSC.lineBufferBitDepth;
     pSrcCaps->dscCaps.maxWidthPerSlice    = 5120; // Max DSC buffer width per head is 5120, this can be chunks of 1/2/4 slices, so keep 5120 as the very max.
 
+    // Clients clear pSinkCaps when the sink changes, so this is set if the link was assessed before.
+    const NvBool bAssessedBefore = (pSinkCaps->pHdmiForumInfo != NULL);
+
     pSinkCaps->pHdmiForumInfo = &pSinkEdid->hdmiForumInfo;
     populateAudioCaps(&pSinkEdid->ext861,   pSinkCaps);
     populateAudioCaps(&pSinkEdid->ext861_2, pSinkCaps);
@@ -449,6 +452,9 @@ hdmiAssessLinkCapabilitiesC671(NVHDMIPKT_CLASS          *pThis,
             pSinkCaps->linkMaxFRLRateDSC = HDMI_FRL_DATA_RATE_NONE;
             return ret;
         }
+    } else if (bAssessedBefore) {
+        // Without link training the sink's EDID can't raise what training found before.
+        maxFRLRate = NV_MIN(maxFRLRate, (NvU32)pSinkCaps->linkMaxFRLRate);
     }
 
     pSinkCaps->linkMaxFRLRate    = translateFRLCapToFRLDataRate(maxFRLRate);
