@@ -1158,6 +1158,7 @@ hdmiQueryFRLConfigC671(NVHDMIPKT_CLASS                         *pThis,
 
 #if defined(NVHDMIPKT_NVKMS)
         NvU32 hVisible, vVisible, rr;
+        NvU64 rasterPixels;
         NvBool clampBpp;
 #endif
 
@@ -1290,8 +1291,10 @@ hdmiQueryFRLConfigC671(NVHDMIPKT_CLASS                         *pThis,
         hVisible = pVidTransInfo->pTiming->HVisible;
         vVisible = pVidTransInfo->pTiming->VVisible;
 
-        rr = (pVidTransInfo->pTiming->pclk * (NvU64)10000) /
-             (pVidTransInfo->pTiming->HTotal * (NvU64)pVidTransInfo->pTiming->VTotal);
+        rasterPixels = pVidTransInfo->pTiming->HTotal *
+                       (NvU64)pVidTransInfo->pTiming->VTotal;
+        rr = (rasterPixels != 0) ?
+             ((pVidTransInfo->pTiming->pclk * (NvU64)10000) / rasterPixels) : 0;
 
         clampBpp = ((rr >= 480) || ((rr >= 165) && (hVisible == 5120) && (vVisible == 2160))) &&
                    (!pVidTransInfo->pTiming->interlaced) &&
