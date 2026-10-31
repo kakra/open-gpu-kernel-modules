@@ -78,6 +78,8 @@ extern bool nv_drm_scaling_mode_module_param;
 extern bool nv_drm_vrr_flip_timestamps_module_param;
 /* Set to true when vblank counts and VRR flip times come from the raster position register. */
 extern bool nv_drm_hw_raster_module_param;
+/* Set to true when repeated failed GEM allocations of a client are held back. */
+extern bool nv_drm_gem_alloc_backoff_module_param;
 
 void *nv_drm_calloc(size_t nmemb, size_t size);
 

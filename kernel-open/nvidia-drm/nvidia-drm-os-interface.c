@@ -50,6 +50,7 @@ bool nv_drm_deadline_boost_module_param = true;
 bool nv_drm_scaling_mode_module_param = true;
 bool nv_drm_vrr_flip_timestamps_module_param = true;
 bool nv_drm_hw_raster_module_param = true;
+bool nv_drm_gem_alloc_backoff_module_param = true;
 
 void *nv_drm_calloc(size_t nmemb, size_t size)
 {

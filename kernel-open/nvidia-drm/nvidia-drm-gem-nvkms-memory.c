@@ -627,11 +627,19 @@ done:
 
 #define NV_DRM_GEM_ALLOC_BACKOFF_MIN_MS 100
 #define NV_DRM_GEM_ALLOC_BACKOFF_MAX_MS 2000
+/* Start over after this long past the end of the last back-off */
+#define NV_DRM_GEM_ALLOC_BACKOFF_RESET_MS 10000
 
 static void nv_drm_gem_alloc_failed(struct nv_drm_file *nv_file,
                                     u64 size, bool scanout)
 {
     unsigned int delay_ms = nv_file->gem_alloc_fail_delay_ms;
+
+    if (delay_ms != 0 &&
+        time_after(jiffies, nv_file->gem_alloc_fail_until +
+                            msecs_to_jiffies(NV_DRM_GEM_ALLOC_BACKOFF_RESET_MS))) {
+        delay_ms = 0;
+    }
 
     delay_ms = (delay_ms == 0) ? NV_DRM_GEM_ALLOC_BACKOFF_MIN_MS :
                min(delay_ms * 2, (unsigned int)NV_DRM_GEM_ALLOC_BACKOFF_MAX_MS);
@@ -691,7 +699,8 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
      * an allocation resets it. A failed scanout allocation doesn't hold back
      * offscreen ones, which can still fall back to sysmem.
      */
-    if (nv_file->gem_alloc_fail_size != 0 &&
+    if (nv_drm_gem_alloc_backoff_module_param &&
+        nv_file->gem_alloc_fail_size != 0 &&
         nv_drm_gem_alloc_covers_failed(nv_file, p->memory_size, scanout) &&
         time_before(jiffies, nv_file->gem_alloc_fail_until)) {
         ret = -ENOMEM;
