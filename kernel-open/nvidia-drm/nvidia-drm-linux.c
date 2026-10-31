@@ -79,6 +79,12 @@ MODULE_PARM_DESC(
     "times (1 = enable (default), 0 = disable)");
 module_param_named(hw_raster, nv_drm_hw_raster_module_param, bool, 0644);
 
+MODULE_PARM_DESC(
+    gem_alloc_backoff,
+    "Fail repeated GEM allocations of a client that are bound to fail again "
+    "without trying (1 = enable (default), 0 = disable)");
+module_param_named(gem_alloc_backoff, nv_drm_gem_alloc_backoff_module_param, bool, 0644);
+
 #endif /* NV_DRM_AVAILABLE */
 
 /*************************************************************************
