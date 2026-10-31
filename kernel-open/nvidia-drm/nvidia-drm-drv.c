@@ -936,6 +936,8 @@ static int nv_drm_dev_load(struct drm_device *dev)
         NV_DRM_DEV_LOG_ERR(nv_dev, "Failed to register event mask");
     }
 
+    nv_drm_crtc_raster_map_regs(nv_dev);
+
     /* Add crtcs */
 
     nv_drm_enumerate_crtcs_and_planes(nv_dev, &resInfo);
@@ -949,6 +951,10 @@ static int nv_drm_dev_load(struct drm_device *dev)
         if (!nv_drm_workthread_init(&nv_dev->vblank_worker, "nvidia-drm-vblank-notification")) {
             NV_DRM_DEV_LOG_WARN(nv_dev, "Failed to init vblank worker, vblank notification not enabled.");
         } else {
+#if defined(NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP)
+            /* See nv_drm_crtc_get_vblank_counter() */
+            dev->max_vblank_count = NV_DRM_RASTER_FRAME_MASK;
+#endif
             drm_vblank_init(dev, dev->mode_config.num_crtc);
         }
     }
@@ -1029,6 +1035,8 @@ static void nv_drm_dev_unload(struct drm_device *dev)
     /* Clean up mode configuration */
 
     drm_mode_config_cleanup(dev);
+
+    nv_drm_crtc_raster_unmap_regs(nv_dev);
 
     if (!nvKms->declareEventInterest(nv_dev->pDevice, 0x0)) {
         NV_DRM_DEV_LOG_ERR(nv_dev, "Failed to stop event listening");
@@ -2529,6 +2537,7 @@ void nv_drm_suspend_resume(NvBool suspend)
 #if defined(NV_DRM_FBDEV_AVAILABLE)
             drm_fb_helper_set_suspend_unlocked(dev->fb_helper, 1);
 #endif
+            nv_drm_crtc_raster_invalidate_all(dev);
             drm_mode_config_reset(dev);
         } else {
 #if defined(NV_DRM_FBDEV_AVAILABLE)

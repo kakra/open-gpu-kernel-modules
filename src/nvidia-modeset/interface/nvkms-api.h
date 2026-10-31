@@ -275,6 +275,7 @@ enum NvKmsIoctlCommand {
     NVKMS_IOCTL_UNREGISTER_VBLANK_INTR_CALLBACK,
     NVKMS_IOCTL_GET_NEXT_EVENTS,
     NVKMS_IOCTL_MST_I2C_TRANSFER,
+    NVKMS_IOCTL_QUERY_HEAD_RASTER,
 };
 
 
@@ -4506,6 +4507,39 @@ struct NvKmsRegisterVblankIntrCallbackReply {
 struct NvKmsRegisterVblankIntrCallbackParams {
     struct NvKmsRegisterVblankIntrCallbackRequest request; /*! in */
     struct NvKmsRegisterVblankIntrCallbackReply reply;     /*! out */
+};
+
+/*!
+ * NVKMS_IOCTL_QUERY_HEAD_RASTER:
+ *
+ * Query where a head's raster generator reports its position, for reading it
+ * from contexts that can't call into NVKMS. 'valid' is false if the head isn't
+ * active or the register isn't known to be there on this display class.
+ *
+ * The register has the frame count in bits 31:16 and the line in bits 15:0.
+ * Line 0 is the start of vertical sync, and the frame count steps with it.
+ *
+ * This IOCTL can only be used by kernel-mode clients.
+ */
+
+struct NvKmsQueryHeadRasterRequest {
+    NvKmsDeviceHandle deviceHandle;
+    NvKmsDispHandle dispHandle;
+    NvU32 head;
+};
+
+struct NvKmsQueryHeadRasterReply {
+    NvBool valid;
+    NvU32 regOffset; /* in BAR0 */
+    NvU32 firstActiveLine;
+    NvU32 blankStartLine; /* the vblank interrupt fires on this line */
+    NvU32 rasterHeight;
+    NvU64 lineTimeNs NV_ALIGN_BYTES(8);
+};
+
+struct NvKmsQueryHeadRasterParams {
+    struct NvKmsQueryHeadRasterRequest request; /*! in */
+    struct NvKmsQueryHeadRasterReply reply;     /*! out */
 };
 
 /*!

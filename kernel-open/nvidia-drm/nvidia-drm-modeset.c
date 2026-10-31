@@ -469,6 +469,8 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
     struct nv_drm_flip *submitted_flips[NVKMS_KAPI_MAX_HEADS];
     struct nv_drm_crtc *submitted_crtcs[NVKMS_KAPI_MAX_HEADS];
     int num_submitted_flips = 0;
+    bool raster_changes = false;
+    bool applied;
     int i;
     int ret;
 
@@ -540,6 +542,7 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
                  * VRR enabled that NVKMS hasn't reported VRR active for yet.
                  */
                 nv_new_crtc_state->nv_flip->submit_time = 0;
+                nv_new_crtc_state->nv_flip->raster_frame_valid = false;
                 nv_new_crtc_state->nv_flip->vrr =
                     nv_drm_vrr_flip_timestamps_module_param &&
                     nv_crtc->vrr_active &&
@@ -596,15 +599,37 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
         const NvU64 submit_time = ktime_get_ns();
 
         for (i = 0; i < num_submitted_flips; i++) {
+            if (submitted_flips[i]->vrr) {
+                nv_drm_crtc_set_flip_raster_frame(submitted_crtcs[i],
+                                                  submitted_flips[i]);
+            }
             WRITE_ONCE(submitted_flips[i]->kick_time, 0);
             WRITE_ONCE(submitted_flips[i]->submit_time, submit_time);
         }
     }
 
-    if (!nvKms->applyModeSetConfig(nv_dev->pDevice,
-                                   requested_config,
-                                   &reply_config,
-                                   commit)) {
+    if (commit && nv_drm_vblank_module_param) {
+        for_each_new_crtc_in_state(state, crtc, new_crtc_state, i) {
+            if (drm_atomic_crtc_needs_modeset(new_crtc_state)) {
+                raster_changes = true;
+            }
+        }
+    }
+
+    if (raster_changes) {
+        nv_drm_crtc_raster_invalidate_all(dev);
+    }
+
+    applied = nvKms->applyModeSetConfig(nv_dev->pDevice,
+                                        requested_config,
+                                        &reply_config,
+                                        commit);
+
+    if (raster_changes) {
+        nv_drm_crtc_raster_update_all(dev);
+    }
+
+    if (!applied) {
         return -EINVAL;
     }
 

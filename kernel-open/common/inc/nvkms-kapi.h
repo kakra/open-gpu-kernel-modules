@@ -679,6 +679,14 @@ struct NvKmsKapiCallbacks {
     void (*probe)(const struct NvKmsKapiGpuInfo *gpu_info);
 };
 
+struct NvKmsKapiHeadRaster {
+    NvU32 regOffset;
+    NvU32 firstActiveLine;
+    NvU32 blankStartLine;
+    NvU32 rasterHeight;
+    NvU64 lineTimeNs;
+};
+
 struct NvKmsKapiFunctionsTable {
 
     /*!
@@ -1749,6 +1757,23 @@ struct NvKmsKapiFunctionsTable {
         NvU32 *pMaxBpc,
         NvBool *pLimited
     );
+
+    /*!
+     * Query where a head's raster generator reports its position, see
+     * NVKMS_IOCTL_QUERY_HEAD_RASTER. Must be called from a context that can
+     * sleep; the result stays right until the next modeset on the device.
+     *
+     * \param [in]  device  A device allocated using allocateDevice().
+     *
+     * \param [in]  head    The head to query.
+     *
+     * \param [out] pInfo   The position of the register and the raster.
+     *
+     * \return NV_TRUE if the head's raster can be read this way.
+     */
+    NvBool (*getHeadRaster)(struct NvKmsKapiDevice *device,
+                            NvU32 head,
+                            struct NvKmsKapiHeadRaster *pInfo);
 
     /* One bounded MST I2C transfer; serialized with modesetting and PM. */
     NvBool (*mstI2cTransfer)(struct NvKmsKapiDevice *device,

@@ -51,6 +51,9 @@
 
 #include <drm/drm_vblank.h>
 
+#include <linux/io.h>
+#include <linux/pci.h>
+
 /**
  * Helper macros for handling both 16-bit (vendor) and 32-bit (colorop) LUT blobs.
  * Vendor properties provide 16-bit drm_color_lut, colorops provide 32-bit drm_color_lut32.
@@ -2650,6 +2653,136 @@ static void nv_drm_crtc_disable_vblank(struct drm_crtc *crtc)
 }
 
 #if defined(NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP)
+/*
+ * Read the raster position, a single register read so frame and line belong
+ * together. Line 0 is the start of vertical sync, where the frame count steps,
+ * so a frame is: vsync and back porch, active lines, front porch; at a VRR
+ * panel's stretched blanking it waits one line past the raster height. Called
+ * with dev->vblank_time_lock held.
+ */
+static bool __nv_drm_crtc_raster_read(const struct nv_drm_crtc *nv_crtc,
+                                      u32 *frame, u32 *line)
+{
+    u32 value;
+
+    if (!READ_ONCE(nv_drm_hw_raster_module_param) ||
+        nv_crtc->raster_reg == NULL) {
+        return false;
+    }
+
+    value = readl(nv_crtc->raster_reg);
+    *frame = value >> 16;
+    *line = value & 0xffff;
+
+    return value != 0xffffffff && *line <= nv_crtc->raster_height + 16;
+}
+
+/*
+ * When the first active line of the frame that the given line belongs to is
+ * scanned out, or for lines from the start of blanking on the next frame's, as
+ * if the raster didn't wait. Called with dev->vblank_time_lock held.
+ */
+static NvU64 __nv_drm_crtc_raster_first_active(const struct nv_drm_crtc *nv_crtc,
+                                               u32 line, NvU64 now)
+{
+    const u32 first_active = nv_crtc->raster_first_active;
+
+    if (line < first_active) {
+        return now + (first_active - line) * nv_crtc->raster_line_ns;
+    }
+    if (line < nv_crtc->raster_blank_start) {
+        return now - (line - first_active) * nv_crtc->raster_line_ns;
+    }
+    return now + (max(nv_crtc->raster_height, line) - line + first_active) *
+                 nv_crtc->raster_line_ns;
+}
+
+#define NV_DRM_RASTER_STUCK_VBLANKS 8
+#define NV_DRM_RASTER_STUCK_NS      100000000ULL
+
+/*
+ * The vblank count in the hardware's terms: DRM core wants it to step at the
+ * start of blanking, where the vblank interrupt fires, but the frame count only
+ * steps at line 0. With VRR the raster can wait in between for a long time.
+ */
+static u32 __nv_drm_crtc_raster_count(const struct nv_drm_crtc *nv_crtc,
+                                      u32 frame, u32 line)
+{
+    return frame + (line >= nv_crtc->raster_blank_start ? 1 : 0);
+}
+
+/*
+ * The hardware counts every refresh, including those while vblank interrupts
+ * are off, which DRM core can't work out itself with VRR, where they have no
+ * fixed length. It has 16 bits, so a gap of more than 65536 refreshes loses
+ * multiples of that. If the register can't be used the count is advanced per
+ * vblank interrupt instead, see __nv_drm_crtc_raster_vblank_irq(), and it
+ * carries on from there when it can again. Called by DRM core with
+ * dev->vblank_time_lock held.
+ */
+static u32 nv_drm_crtc_get_vblank_counter(struct drm_crtc *crtc)
+{
+    struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
+    u32 frame, line;
+
+    if (__nv_drm_crtc_raster_read(nv_crtc, &frame, &line)) {
+        const u32 count = __nv_drm_crtc_raster_count(nv_crtc, frame, line);
+
+        if (!nv_crtc->raster_synced) {
+            nv_crtc->raster_base = count - nv_crtc->raster_last;
+            nv_crtc->raster_synced = true;
+        }
+        nv_crtc->raster_last = (count - nv_crtc->raster_base) &
+                               NV_DRM_RASTER_FRAME_MASK;
+    } else {
+        nv_crtc->raster_synced = false;
+    }
+
+    return nv_crtc->raster_last;
+}
+
+/*
+ * Called before DRM core handles a vblank interrupt, with
+ * dev->vblank_time_lock held. Stop using a register that doesn't move: an
+ * NVKMS modeset nvidia-drm didn't ask for may have moved the head, and it would
+ * stop the vblank count, leaving anyone waiting for a vblank hanging. NVKMS
+ * queues a callback per interrupt behind nvkms_lock, so after a long hold of
+ * that lock many arrive at once and only the first sees the count move; go by
+ * time as well.
+ */
+static void __nv_drm_crtc_raster_vblank_irq(struct nv_drm_crtc *nv_crtc)
+{
+    u32 frame, line;
+
+    if (!__nv_drm_crtc_raster_read(nv_crtc, &frame, &line) ||
+        !nv_crtc->raster_synced) {
+        nv_crtc->raster_last = (nv_crtc->raster_last + 1) &
+                               NV_DRM_RASTER_FRAME_MASK;
+        nv_crtc->raster_synced = false;
+        return;
+    }
+
+    if (((__nv_drm_crtc_raster_count(nv_crtc, frame, line) -
+          nv_crtc->raster_base) & NV_DRM_RASTER_FRAME_MASK) ==
+        nv_crtc->raster_last) {
+        const NvU64 now = ktime_get_ns();
+
+        if (nv_crtc->raster_stuck == 0) {
+            nv_crtc->raster_stuck_time = now;
+        }
+        if (++nv_crtc->raster_stuck >= NV_DRM_RASTER_STUCK_VBLANKS &&
+            now - nv_crtc->raster_stuck_time >= NV_DRM_RASTER_STUCK_NS) {
+            nv_crtc->raster_reg = NULL;
+            nv_crtc->raster_synced = false;
+            NV_DRM_DEV_LOG_WARN(to_nv_device(nv_crtc->base.dev),
+                                "Raster position of head %u isn't moving (frame %u line %u), not using it until the next modeset",
+                                nv_crtc->head, frame, line);
+        }
+    } else {
+        nv_crtc->raster_stuck = 0;
+    }
+}
+
 static bool nv_drm_crtc_get_vblank_timestamp(
     struct drm_crtc *crtc,
     int *max_error,
@@ -2658,6 +2791,17 @@ static bool nv_drm_crtc_get_vblank_timestamp(
 {
     struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
     NvU64 timestamp;
+    u32 frame, line;
+
+    /*
+     * Outside the vblank callback the count can have moved on from the stored
+     * timestamp, e.g. over the refreshes while vblank interrupts were off.
+     */
+    if (!in_vblank_irq && __nv_drm_crtc_raster_read(nv_crtc, &frame, &line)) {
+        *vblank_time = ns_to_ktime(
+            __nv_drm_crtc_raster_first_active(nv_crtc, line, ktime_get_ns()));
+        return true;
+    }
 
     /*
      * DRM core calls this hook with locks held. To avoid deadlock, no NvKms
@@ -2695,6 +2839,7 @@ static struct drm_crtc_funcs nv_crtc_funcs = {
     .enable_vblank = nv_drm_crtc_enable_vblank,
     .disable_vblank = nv_drm_crtc_disable_vblank,
 #if defined(NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP)
+    .get_vblank_counter = nv_drm_crtc_get_vblank_counter,
     .get_vblank_timestamp = nv_drm_crtc_get_vblank_timestamp,
 #endif
 };
@@ -3481,6 +3626,64 @@ static bool __nv_drm_crtc_find_flip_vblank(const struct nv_drm_crtc *nv_crtc,
     return decided;
 }
 
+enum nv_drm_raster_flip {
+    NV_DRM_RASTER_FLIP_UNKNOWN, /* The raster can't be used */
+    NV_DRM_RASTER_FLIP_WAIT,    /* The flip waits for the scanout to end */
+    NV_DRM_RASTER_FLIP_FOUND,
+};
+
+/*
+ * Find when a VRR flip is scanned out from the raster position, which the
+ * event handling below only has to infer. If the raster restarted since the
+ * flip was submitted, or it isn't known when it was submitted, this frame or
+ * the one the raster is about to start shows it. The flip's event can arrive
+ * right after the flip is submitted during a scanout, long before the flip
+ * happens at the end of that scanout. Called with dev->event_lock and
+ * dev->vblank_time_lock held.
+ */
+static enum nv_drm_raster_flip
+__nv_drm_crtc_raster_flip_time(struct nv_drm_crtc *nv_crtc,
+                               const struct nv_drm_flip *nv_flip,
+                               u64 *count, NvU64 *time)
+{
+    const bool submitted = nv_flip->raster_frame_valid;
+    u32 frame, line, flip_count;
+    NvU64 now;
+
+    if (!__nv_drm_crtc_raster_read(nv_crtc, &frame, &line) ||
+        !nv_crtc->raster_synced) {
+        return NV_DRM_RASTER_FLIP_UNKNOWN;
+    }
+    now = ktime_get_ns();
+
+    if (line < nv_crtc->raster_blank_start) {
+        /* The flip can't be on screen if the raster hasn't restarted */
+        if (submitted && nv_flip->raster_frame == frame) {
+            return NV_DRM_RASTER_FLIP_WAIT;
+        }
+        *time = __nv_drm_crtc_raster_first_active(nv_crtc, line, now);
+        flip_count = frame;
+    } else if (!submitted || nv_flip->raster_frame == frame) {
+        /* The raster is about to restart for the flip */
+        *time = __nv_drm_crtc_raster_first_active(nv_crtc, line, now);
+        flip_count = frame + 1;
+    } else {
+        /*
+         * This handler is so late the flip's scanout has ended. If the raster
+         * has been waiting since, this is that much late.
+         */
+        *time = now - (nv_crtc->raster_blank_start -
+                       nv_crtc->raster_first_active) * nv_crtc->raster_line_ns;
+        flip_count = frame;
+    }
+
+    /* raster_last is what DRM core's count currently corresponds to */
+    *count = drm_crtc_vblank_count(&nv_crtc->base) +
+             (s16)(flip_count - nv_crtc->raster_base - nv_crtc->raster_last);
+
+    return NV_DRM_RASTER_FLIP_FOUND;
+}
+
 /*
  * Send the events of pending flips whose vblank has been handled, or of all
  * pending flips if 'all' (using the latest vblank, or the current time if
@@ -3498,9 +3701,18 @@ static void __nv_drm_crtc_process_pending_flip_events(struct nv_drm_crtc *nv_crt
         bool found = false;
         u64 count = 0;
         NvU64 time = 0;
+        enum nv_drm_raster_flip raster = NV_DRM_RASTER_FLIP_UNKNOWN;
 
         spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
-        if (nv_crtc->vblank_history_len > 0) {
+        if (nv_flip->vrr) {
+            raster = __nv_drm_crtc_raster_flip_time(nv_crtc, nv_flip,
+                                                    &count, &time);
+        }
+        if (raster == NV_DRM_RASTER_FLIP_FOUND) {
+            found = true;
+        } else if (raster == NV_DRM_RASTER_FLIP_WAIT && !all) {
+            found = false;
+        } else if (nv_crtc->vblank_history_len > 0) {
             found = __nv_drm_crtc_find_flip_vblank(nv_crtc, nv_flip,
                                                    &count, &time);
             if (!found && all) {
@@ -3540,6 +3752,15 @@ static bool __nv_drm_crtc_find_vrr_flip_time(struct nv_drm_crtc *nv_crtc,
                                              u64 *count, NvU64 *time)
 {
     NvU64 kick_time = READ_ONCE(nv_flip->kick_time);
+
+    switch (__nv_drm_crtc_raster_flip_time(nv_crtc, nv_flip, count, time)) {
+    case NV_DRM_RASTER_FLIP_FOUND:
+        return true;
+    case NV_DRM_RASTER_FLIP_WAIT:
+        return false;
+    case NV_DRM_RASTER_FLIP_UNKNOWN:
+        break;
+    }
 
     if (nv_crtc->vblank_history_len > 0 &&
         __nv_drm_crtc_find_flip_vblank(nv_crtc, nv_flip, count, time)) {
@@ -3750,7 +3971,128 @@ void nv_drm_crtc_set_vblank_duration(struct nv_drm_crtc *nv_crtc,
     spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
 }
 
+/* The registers of all heads: NV_PDISP_RG_DPCA(0 to 7) */
+#define NV_DRM_RASTER_REGS_OFFSET 0x00616000
+#define NV_DRM_RASTER_REGS_SIZE   0x00004000
+
+void nv_drm_crtc_raster_map_regs(struct nv_drm_device *nv_dev)
+{
+    struct device *device = nv_dev->dev->dev;
+
+    if (!nv_drm_vblank_module_param || !dev_is_pci(device)) {
+        return;
+    }
+
+    nv_dev->raster_regs =
+        ioremap(pci_resource_start(to_pci_dev(device), 0) +
+                NV_DRM_RASTER_REGS_OFFSET, NV_DRM_RASTER_REGS_SIZE);
+}
+
+void nv_drm_crtc_raster_unmap_regs(struct nv_drm_device *nv_dev)
+{
+    if (nv_dev->raster_regs != NULL) {
+        iounmap(nv_dev->raster_regs);
+        nv_dev->raster_regs = NULL;
+    }
+}
+
+/*
+ * NVKMS can move a head's hardware head at any modeset on the device, also of
+ * other heads, so stop reading the registers before one.
+ */
+void nv_drm_crtc_raster_invalidate_all(struct drm_device *dev)
+{
+    struct drm_crtc *crtc;
+    unsigned long irqflags;
+
+    if (!nv_drm_vblank_module_param) {
+        return;
+    }
+
+    spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
+    nv_drm_for_each_crtc(crtc, dev) {
+        to_nv_crtc(crtc)->raster_reg = NULL;
+    }
+    spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
+}
+
+/* Find the registers again after a modeset. Must be able to sleep. */
+void nv_drm_crtc_raster_update_all(struct drm_device *dev)
+{
+    struct nv_drm_device *nv_dev = to_nv_device(dev);
+    struct drm_crtc *crtc;
+
+    if (nv_dev->raster_regs == NULL) {
+        return;
+    }
+
+    nv_drm_for_each_crtc(crtc, dev) {
+        struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
+        struct NvKmsKapiHeadRaster info;
+        unsigned long irqflags;
+        const bool valid = nvKms->getHeadRaster(nv_dev->pDevice, nv_crtc->head,
+                                                &info) &&
+                           info.regOffset >= NV_DRM_RASTER_REGS_OFFSET &&
+                           info.regOffset + sizeof(u32) <=
+                               NV_DRM_RASTER_REGS_OFFSET +
+                               NV_DRM_RASTER_REGS_SIZE;
+
+        spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
+        nv_crtc->raster_reg = NULL;
+        nv_crtc->raster_synced = false;
+        nv_crtc->raster_stuck = 0;
+        if (valid) {
+            nv_crtc->raster_reg = nv_dev->raster_regs +
+                                  (info.regOffset - NV_DRM_RASTER_REGS_OFFSET);
+            nv_crtc->raster_first_active = info.firstActiveLine;
+            nv_crtc->raster_blank_start = info.blankStartLine;
+            nv_crtc->raster_height = info.rasterHeight;
+            nv_crtc->raster_line_ns = info.lineTimeNs;
+        }
+        spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
+    }
+}
+
+void nv_drm_crtc_set_flip_raster_frame(struct nv_drm_crtc *nv_crtc,
+                                       struct nv_drm_flip *nv_flip)
+{
+    struct drm_device *dev = nv_crtc->base.dev;
+    unsigned long irqflags;
+    u32 frame = 0, line;
+
+    if (!nv_drm_vblank_module_param) {
+        return;
+    }
+
+    spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
+    nv_flip->raster_frame_valid =
+        __nv_drm_crtc_raster_read(nv_crtc, &frame, &line);
+    nv_flip->raster_frame = frame;
+    spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
+}
+
 #else
+
+void nv_drm_crtc_raster_map_regs(struct nv_drm_device *nv_dev)
+{
+}
+
+void nv_drm_crtc_raster_unmap_regs(struct nv_drm_device *nv_dev)
+{
+}
+
+void nv_drm_crtc_raster_invalidate_all(struct drm_device *dev)
+{
+}
+
+void nv_drm_crtc_raster_update_all(struct drm_device *dev)
+{
+}
+
+void nv_drm_crtc_set_flip_raster_frame(struct nv_drm_crtc *nv_crtc,
+                                       struct nv_drm_flip *nv_flip)
+{
+}
 
 bool nv_drm_crtc_handle_flip_events(struct nv_drm_crtc *nv_crtc,
                                     struct nv_drm_flip **pp_nv_flip,
@@ -3801,6 +4143,7 @@ static void nv_drm_crtc_vblank_callback(NvU64 param1, NvU64 param2)
 #if defined(NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP)
     /* Store the timestamp passed from NvKms */
     nv_crtc->last_vblank_time = param2;
+    __nv_drm_crtc_raster_vblank_irq(nv_crtc);
 #endif
 
     spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);

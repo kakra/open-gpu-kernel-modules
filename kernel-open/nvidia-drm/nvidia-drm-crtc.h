@@ -45,6 +45,8 @@
 
 #define NV_DRM_VBLANK_HISTORY 16
 
+#define NV_DRM_RASTER_FRAME_MASK 0xffff
+
 struct nv_drm_crtc {
     NvU32 head;
 
@@ -86,6 +88,26 @@ struct nv_drm_crtc {
      */
     NvU64 vblank_active_ns;
     NvU64 vblank_restart_to_active_ns;
+
+    /*
+     * The head's raster position register and the lines it is compared with,
+     * see nv_drm_crtc_get_vblank_counter(). raster_reg is NULL if it can't be
+     * used right now. raster_last is the last vblank counter value given to
+     * DRM core, raster_base what to subtract from the hardware's to get it;
+     * raster_synced is false if raster_base has to be set again. raster_stuck
+     * counts vblank interrupts in a row the counter didn't move for, since
+     * raster_stuck_time. All are protected by dev->vblank_time_lock.
+     */
+    void __iomem *raster_reg;
+    u32 raster_first_active;
+    u32 raster_blank_start;
+    u32 raster_height;
+    NvU64 raster_line_ns;
+    u32 raster_last;
+    u32 raster_base;
+    bool raster_synced;
+    unsigned int raster_stuck;
+    NvU64 raster_stuck_time;
 
     /*
      * First active line of the last flip whose event was sent, and with it
@@ -247,6 +269,15 @@ struct nv_drm_flip {
      * nv_drm_crtc_handle_flip_events().
      */
     bool vrr;
+
+    /*
+     * @raster_frame, @raster_frame_valid:
+     *
+     * The hardware frame count just before the flip was handed to NVKMS, if
+     * known. Protected by &drm_device.vblank_time_lock.
+     */
+    u32 raster_frame;
+    bool raster_frame_valid;
 };
 
 struct nv_drm_crtc_state {
@@ -517,6 +548,13 @@ static inline void nv_drm_crtc_set_flip_kick_time(struct nv_drm_crtc *nv_crtc,
     }
     spin_unlock(&nv_crtc->flip_list_lock);
 }
+
+void nv_drm_crtc_raster_map_regs(struct nv_drm_device *nv_dev);
+void nv_drm_crtc_raster_unmap_regs(struct nv_drm_device *nv_dev);
+void nv_drm_crtc_raster_invalidate_all(struct drm_device *dev);
+void nv_drm_crtc_raster_update_all(struct drm_device *dev);
+void nv_drm_crtc_set_flip_raster_frame(struct nv_drm_crtc *nv_crtc,
+                                       struct nv_drm_flip *nv_flip);
 
 void nv_drm_enumerate_crtcs_and_planes(
     struct nv_drm_device *nv_dev,

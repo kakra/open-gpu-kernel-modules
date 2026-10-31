@@ -187,6 +187,12 @@ struct nv_drm_device {
     struct NvKmsKapiDevice *pDevice;
 
     /*
+     * Read-only use: the part of BAR0 with the raster generators' position
+     * registers, NULL if not mapped. See nv_drm_crtc_raster_update_all().
+     */
+    void __iomem *raster_regs;
+
+    /*
      * Lock to protect drm-subsystem and fields of this structure
      * from concurrent access.
      *
