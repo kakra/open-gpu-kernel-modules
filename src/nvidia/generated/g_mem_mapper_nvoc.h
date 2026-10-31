@@ -103,7 +103,7 @@ typedef struct MemoryMapper MemoryMapper;
 typedef struct
 {
     struct MemoryMapper *pMemoryMapper;
-    NvU32         numRefs;
+    PORT_ATOMIC NvU32 numRefs;
     PORT_RWLOCK  *pLock;
     struct OBJGPU *pGpu;
     NVOS10_EVENT_KERNEL_CALLBACK_EX semaphoreCallback;
