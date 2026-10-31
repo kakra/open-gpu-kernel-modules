@@ -1695,6 +1695,16 @@ void nvkms_unlock_pm_from_kapi(void)
  * APIs for locking.
  *************************************************************************/
 
+NvBool nvkms_read_trylock_pm_lock_from_kapi(void)
+{
+    return nvkms_read_trylock_pm_lock() == 0;
+}
+
+void nvkms_read_unlock_pm_lock_from_kapi(void)
+{
+    nvkms_read_unlock_pm_lock();
+}
+
 void nvkms_drop_global_lock(void)
 {
     up(&nvkms_lock);

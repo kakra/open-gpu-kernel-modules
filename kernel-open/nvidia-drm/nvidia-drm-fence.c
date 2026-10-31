@@ -2217,17 +2217,32 @@ __nv_drm_semsurf_wait_fence_work_cb
      * Note this command applies "newValue" immediately if the semaphore has
      * already reached "waitValue." It only returns NVKMS_KAPI_ALREADY_SIGNALLED
      * if a separate notification was requested as well.
+     *
+     * The value is never written if this fails, so wait out a system suspend.
+     * Don't wait if the context is going away: its destructor flushes this
+     * work, which could otherwise hold up the freezer until suspend gave up.
+     * Dropping the wait is what happens to work added after shutdown too.
      */
-    ret = nvKms->registerSemaphoreSurfaceCallback(nv_dev->pDevice,
-                                                  ctx->pSemSurface,
-                                                  NULL,
-                                                  NULL,
-                                                  ctx->base.fenceSemIndex,
-                                                  wait_data->pre_wait_value,
-                                                  wait_data->post_wait_value,
-                                                  NULL);
+    while (true) {
+        ret = nvKms->registerSemaphoreSurfaceCallback(nv_dev->pDevice,
+                                                      ctx->pSemSurface,
+                                                      NULL,
+                                                      NULL,
+                                                      ctx->base.fenceSemIndex,
+                                                      wait_data->pre_wait_value,
+                                                      wait_data->post_wait_value,
+                                                      NULL);
 
-    if (ret != NVKMS_KAPI_REG_WAITER_SUCCESS) {
+        if ((ret != NVKMS_KAPI_REG_WAITER_NOT_READY) ||
+            nv_drm_workthread_is_shutting_down(&ctx->worker)) {
+            break;
+        }
+
+        nv_drm_wait_for_resume_sleep();
+    }
+
+    if ((ret != NVKMS_KAPI_REG_WAITER_SUCCESS) &&
+        (ret != NVKMS_KAPI_REG_WAITER_NOT_READY)) {
         NV_DRM_DEV_LOG_ERR(nv_dev,
                            "Failed to register auto-value-update on pre-wait value for sync FD semaphore surface");
     }

@@ -682,6 +682,7 @@ typedef enum NvKmsKapiRegisterWaiterResultRec {
     NVKMS_KAPI_REG_WAITER_FAILED,
     NVKMS_KAPI_REG_WAITER_SUCCESS,
     NVKMS_KAPI_REG_WAITER_ALREADY_SIGNALLED,
+    NVKMS_KAPI_REG_WAITER_NOT_READY,
 } NvKmsKapiRegisterWaiterResult;
 
 struct NvKmsKapiGpuInfo {
@@ -1518,6 +1519,11 @@ struct NvKmsKapiFunctionsTable {
      *         NVKMS_KAPI_REG_WAITER_ALREADY_SIGNALLED if a callback was
      *         requested and the semaphore at <index> has already reached or
      *         exceeded <wait_value>
+     *
+     *         NVKMS_KAPI_REG_WAITER_NOT_READY if no callback was requested and
+     *         the GPU is being suspended, is suspended or is resuming. Nothing
+     *         was registered; the caller should try again later. Registrations
+     *         with a callback don't return this.
      *
      *         NVKMS_KAPI_REG_WAITER_FAILED if waiter registration failed.
      */

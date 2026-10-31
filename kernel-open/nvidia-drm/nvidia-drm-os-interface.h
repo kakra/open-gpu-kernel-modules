@@ -101,6 +101,9 @@ bool nv_drm_workthread_init(nv_drm_workthread *worker, const char *name);
 /* Can be called concurrently with nv_drm_workthread_add_work() */
 void nv_drm_workthread_shutdown(nv_drm_workthread *worker);
 
+/* Can be called concurrently with nv_drm_workthread_shutdown() */
+bool nv_drm_workthread_is_shutting_down(nv_drm_workthread *worker);
+
 void nv_drm_workthread_work_init(nv_drm_work *work,
                                  void (*callback)(void *),
                                  void *arg);
@@ -123,6 +126,9 @@ int nv_drm_create_sync_file(struct dma_fence *fence);
 struct dma_fence *nv_drm_sync_file_get_fence(int fd);
 
 void nv_drm_yield(void);
+
+/* Sleep a little between retries of work that waits for system resume. */
+void nv_drm_wait_for_resume_sleep(void);
 
 #if defined(NVCPU_AARCH64)
 NvBool nv_aarch64_pfn_is_map_memory(unsigned long pfn);
