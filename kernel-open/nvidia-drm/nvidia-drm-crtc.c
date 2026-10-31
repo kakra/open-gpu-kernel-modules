@@ -318,6 +318,20 @@ cursor_plane_req_config_update(struct drm_plane *plane,
     if (req_config->surface == NULL) {
         return -EINVAL;
     }
+
+    /*
+     * The cursor can't crop or scale: NVKMS always shows the whole surface at
+     * its own size. Fail the commit instead of showing the wrong image, so that
+     * the compositor can fall back to composition.
+     */
+    if (plane_state->src_x != 0 || plane_state->src_y != 0 ||
+        plane_state->src_w != (plane_state->fb->width << 16) ||
+        plane_state->src_h != (plane_state->fb->height << 16) ||
+        plane_state->crtc_w != plane_state->fb->width ||
+        plane_state->crtc_h != plane_state->fb->height) {
+        return -EINVAL;
+    }
+
     req_config->dstX = plane_state->crtc_x;
     req_config->dstY = plane_state->crtc_y;
 
