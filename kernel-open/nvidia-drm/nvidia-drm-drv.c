@@ -771,6 +771,14 @@ static void nv_drm_handle_hotplug_event(struct work_struct *work)
     struct delayed_work *dwork = to_delayed_work(work);
     struct nv_drm_device *nv_dev =
         container_of(dwork, struct nv_drm_device, hotplug_event_work);
+    struct drm_connector_list_iter conn_iter;
+    struct drm_connector *connector;
+
+    drm_connector_list_iter_begin(nv_dev->dev, &conn_iter);
+    drm_for_each_connector_iter(connector, &conn_iter) {
+        nv_drm_connector_update_link_status(connector);
+    }
+    drm_connector_list_iter_end(&conn_iter);
 
     drm_kms_helper_hotplug_event(nv_dev->dev);
 }

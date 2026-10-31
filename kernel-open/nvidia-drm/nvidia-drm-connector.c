@@ -1511,6 +1511,41 @@ bool nv_drm_connector_revoke_permissions(struct drm_device *dev,
     return ret;
 }
 
+/*
+ * Set a BAD link-status if HDMI FRL link training failed in the last modeset,
+ * which tells the compositor to set a mode again. Takes connection_mutex.
+ */
+void nv_drm_connector_update_link_status(struct drm_connector *connector)
+{
+    struct drm_device *dev = connector->dev;
+    struct nv_drm_device *nv_dev = to_nv_device(dev);
+    struct nv_drm_connector *nv_connector = to_nv_connector(connector);
+    NvBool failed = NV_FALSE;
+
+    if ((connector->connector_type != DRM_MODE_CONNECTOR_HDMIA) &&
+        (connector->connector_type != DRM_MODE_CONNECTOR_HDMIB)) {
+        return;
+    }
+
+    drm_modeset_lock(&dev->mode_config.connection_mutex, NULL);
+
+    if ((connector->state->crtc != NULL) &&
+        (nv_connector->nv_detected_encoder != NULL) &&
+        !nvKms->getDisplayFrlLinkFailed(
+            nv_dev->pDevice,
+            nv_connector->nv_detected_encoder->hDisplay,
+            &failed)) {
+        failed = NV_FALSE;
+    }
+
+    drm_modeset_unlock(&dev->mode_config.connection_mutex);
+
+    if (failed) {
+        drm_connector_set_link_status_property(connector,
+                                               DRM_MODE_LINK_STATUS_BAD);
+    }
+}
+
 void nv_drm_connector_update_content_protection(struct nv_drm_connector *nv_connector)
 {
 #ifdef NV_DRM_SUPPORT_CONTENT_PROTECTION_PROPERTY

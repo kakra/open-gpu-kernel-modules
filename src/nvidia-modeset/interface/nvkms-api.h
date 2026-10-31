@@ -2790,6 +2790,12 @@ enum NvKmsDpyAttribute {
      * wouldn't raise it.
      */
     NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_LIMITED,
+
+    /*
+     * Whether HDMI FRL link training failed in the last modeset, so that the
+     * display doesn't show anything until the next successful one.
+     */
+    NV_KMS_DPY_ATTRIBUTE_HDMI_FRL_LINK_FAILED,
 };
 
 /*! Values for the NV_KMS_DPY_ATTRIBUTE_CONTENT_TYPE attribute. */

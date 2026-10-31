@@ -977,6 +977,7 @@ void nvDpyProbeMaxPixelClock(NVDpyEvoPtr pDpyEvo)
 
             nvkms_memset(&pDpyEvo->hdmi.srcCaps, 0, sizeof(pDpyEvo->hdmi.srcCaps));
             nvkms_memset(&pDpyEvo->hdmi.sinkCaps, 0, sizeof(pDpyEvo->hdmi.sinkCaps));
+            pDpyEvo->hdmi.frlLinkFailures = 0;
 
             if (nvHdmiDpySupportsFrl(pDpyEvo)) {
                 /*

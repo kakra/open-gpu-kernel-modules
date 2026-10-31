@@ -1759,6 +1759,24 @@ struct NvKmsKapiFunctionsTable {
     );
 
     /*!
+     * Get whether HDMI FRL link training failed in the last modeset of a
+     * display, so that it doesn't show anything until the next successful one.
+     *
+     * \param [in]   device   A device returned by allocateDevice().
+     *
+     * \param [in]   display  The display to query.
+     *
+     * \param [out]  pFailed  Whether link training failed.
+     *
+     * \return NV_TRUE on success, NV_FALSE on failure.
+     */
+    NvBool (*getDisplayFrlLinkFailed)(
+        struct NvKmsKapiDevice *device,
+        NvKmsKapiDisplay display,
+        NvBool *pFailed
+    );
+
+    /*!
      * Query where a head's raster generator reports its position, see
      * NVKMS_IOCTL_QUERY_HEAD_RASTER. Must be called from a context that can
      * sleep; the result stays right until the next modeset on the device.

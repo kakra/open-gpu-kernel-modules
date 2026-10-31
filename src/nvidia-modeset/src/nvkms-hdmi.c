@@ -31,6 +31,7 @@
 #include "nvkms-hdmi.h"
 #include "nvkms-evo.h"
 #include "nvkms-modepool.h"
+#include "nvkms-private.h"
 #include "nvkms-rmapi.h"
 #include "nvkms-types.h"
 #include "nvkms-utils.h"
@@ -2813,6 +2814,39 @@ static enum NvKmsFrlRateForce GetForceMaxFrlRateType(
     return NVKMS_FRL_RATE_FORCE_NONE;
 }
 
+/*
+ * Track failed FRL link training of a modeset. The display stays black after
+ * a failure, and nothing else tells the clients: reassess the link and send
+ * them a dpy event, which nvidia-drm turns into a BAD link-status so that the
+ * compositor sets a mode again. Give up after a few failures in a row, so that
+ * a link that keeps failing doesn't cause modesets forever.
+ */
+static void HandleFrlLinkTrainingResult(NVDispEvoPtr pDispEvo,
+                                        const NVConnectorEvoRec *pConnectorEvo,
+                                        NvBool trained)
+{
+    const NvU8 MAX_REPORTED_FAILURES = 3;
+    NVDpyEvoPtr pDpyEvo =
+        nvGetDpyEvoFromDispEvo(pDispEvo, pConnectorEvo->displayId);
+
+    if (pDpyEvo == NULL) {
+        return;
+    }
+
+    if (trained) {
+        pDpyEvo->hdmi.frlLinkFailures = 0;
+        return;
+    }
+
+    if (pDpyEvo->hdmi.frlLinkFailures >= MAX_REPORTED_FAILURES) {
+        return;
+    }
+
+    pDpyEvo->hdmi.frlLinkFailures++;
+    pDpyEvo->hdmi.reassessFrlLinkCaps = TRUE;
+    nvSendDpyEventEvo(pDpyEvo, NVKMS_EVENT_TYPE_DPY_CHANGED);
+}
+
 void nvHdmiFrlSetConfig(NVDispEvoRec *pDispEvo, NvU32 head)
 {
     const NVDevEvoRec *pDevEvo = pDispEvo->pDevEvo;
@@ -2822,6 +2856,7 @@ void nvHdmiFrlSetConfig(NVDispEvoRec *pDispEvo, NvU32 head)
     NVHDMIPKT_RESULT ret;
     NvU32 retries = 0;
     const NvU32 MAX_RETRIES = 5;
+    NvBool trained;
 
     if (pFrlConfig->frlRate == HDMI_FRL_DATA_RATE_NONE) {
         return;
@@ -2830,12 +2865,19 @@ void nvHdmiFrlSetConfig(NVDispEvoRec *pDispEvo, NvU32 head)
     nvAssert(pHeadState->activeRmId != 0);
 
     do {
+        /* Give the sink time to get ready for link training again. */
+        if (retries != 0) {
+            nvkms_usleep(200000);
+        }
+
         ret = NvHdmi_SetFRLConfig(pDevEvo->hdmiLib.handle,
                                   pDispEvo->displayOwner,
                                   pHeadState->activeRmId,
                                   NV_FALSE /* bFakeLt */,
                                   pFrlConfig);
     } while (ret != NVHDMIPKT_SUCCESS && retries++ < MAX_RETRIES);
+
+    trained = (ret == NVHDMIPKT_SUCCESS);
 
     if (ret != NVHDMIPKT_SUCCESS) {
         nvEvoLogDisp(pDispEvo, EVO_LOG_WARN,
@@ -2866,4 +2908,6 @@ void nvHdmiFrlSetConfig(NVDispEvoRec *pDispEvo, NvU32 head)
                           "HDMI FRL link training retried %d times.",
                           retries);
     }
+
+    HandleFrlLinkTrainingResult(pDispEvo, pHeadState->pConnectorEvo, trained);
 }

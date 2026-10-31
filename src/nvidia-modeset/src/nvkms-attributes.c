@@ -867,6 +867,12 @@ static NvBool GetCurrentColorBpcLimited(const NVDpyEvoRec *pDpyEvo,
     return TRUE;
 }
 
+static NvBool GetHdmiFrlLinkFailed(const NVDpyEvoRec *pDpyEvo, NvS64 *pValue)
+{
+    *pValue = (pDpyEvo->hdmi.frlLinkFailures != 0);
+    return TRUE;
+}
+
 static NvBool GetRequestedColorBpcMaxValidValues(
     const NVDpyEvoRec *pDpyEvo,
     struct NvKmsAttributeValidValuesCommonReply *pValidValues)
@@ -1466,6 +1472,12 @@ static const struct {
     [NV_KMS_DPY_ATTRIBUTE_CURRENT_COLOR_BPC_LIMITED] = {
         .set            = NULL,
         .get            = GetCurrentColorBpcLimited,
+        .getValidValues = NULL,
+        .type           = NV_KMS_ATTRIBUTE_TYPE_BOOLEAN,
+    },
+    [NV_KMS_DPY_ATTRIBUTE_HDMI_FRL_LINK_FAILED] = {
+        .set            = NULL,
+        .get            = GetHdmiFrlLinkFailed,
         .getValidValues = NULL,
         .type           = NV_KMS_ATTRIBUTE_TYPE_BOOLEAN,
     },

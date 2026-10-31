@@ -3820,6 +3820,28 @@ static NvBool GetDisplayColorBpc(
     return NV_TRUE;
 }
 
+static NvBool GetDisplayFrlLinkFailed(
+    struct NvKmsKapiDevice *device,
+    NvKmsKapiDisplay display,
+    NvBool *pFailed)
+{
+    NvS64 failed;
+
+    if (device->hKmsDevice == 0x0) {
+        return NV_FALSE;
+    }
+
+    if (!GetDisplayAttribute(device, display,
+                             NV_KMS_DPY_ATTRIBUTE_HDMI_FRL_LINK_FAILED,
+                             &failed)) {
+        return NV_FALSE;
+    }
+
+    *pFailed = (failed != 0);
+
+    return NV_TRUE;
+}
+
 static NvBool KmsSetMode(
     struct NvKmsKapiDevice *device,
     const struct NvKmsKapiRequestedModeSetConfig *requestedConfig,
@@ -4786,6 +4808,7 @@ NvBool nvKmsKapiGetFunctionsTableInternal
     funcsTable->perfBoost = RmPerfBoost;
 
     funcsTable->getDisplayColorBpc = GetDisplayColorBpc;
+    funcsTable->getDisplayFrlLinkFailed = GetDisplayFrlLinkFailed;
 
     funcsTable->getHeadRaster = GetHeadRaster;
 
