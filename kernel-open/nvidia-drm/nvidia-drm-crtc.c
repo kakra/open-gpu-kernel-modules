@@ -1246,6 +1246,7 @@ plane_req_config_update(struct drm_plane *plane,
     struct nv_drm_plane_state *nv_drm_plane_state =
         to_nv_drm_plane_state(plane_state);
     bool matrix_overrides_changed = 0;
+    bool degamma_rebuilt = false;
 
     if (plane_state->fb == NULL) {
         plane_req_config_disable(req_config);
@@ -1566,7 +1567,10 @@ plane_req_config_update(struct drm_plane *plane,
                                &matrix_overrides_changed);
     req_config->flags.matrixOverridesChanged = matrix_overrides_changed;
 
-    if (nv_drm_plane_state->degamma_changed || crtc_state->color_mgmt_changed) {
+    if (nv_drm_plane_state->degamma_changed || crtc_state->color_mgmt_changed ||
+        (plane->state->crtc != plane_state->crtc)) {
+        degamma_rebuilt = true;
+
         if (nv_drm_plane_state->degamma_drm_lut_surface != NULL) {
             kref_put(&nv_drm_plane_state->degamma_drm_lut_surface->base.refcount,
                      release_drm_lut_surface);
@@ -1593,11 +1597,13 @@ plane_req_config_update(struct drm_plane *plane,
     /*
      * Send ILUT configuration to NVKMS if:
      * - degamma properties changed, OR
+     * - the ILUT was rebuilt above, which includes the CRTC's DEGAMMA_LUT
+     *   being changed or removed, OR
      * - plane is being re-enabled and old req_config had ILUT disabled
      *   but DRM plane state has ILUT (blob ID didn't change, but NVKMS
      *   needs to be notified)
      */
-    if (nv_drm_plane_state->degamma_changed ||
+    if (nv_drm_plane_state->degamma_changed || degamma_rebuilt ||
         (!old_config.ilut.enabled && (nv_drm_plane_state->degamma_drm_lut_surface != NULL))) {
 
         if (nv_drm_plane_state->degamma_drm_lut_surface != NULL) {
