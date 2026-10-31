@@ -1242,6 +1242,17 @@ plane_req_config_update(struct drm_plane *plane,
         return -EINVAL;
     }
 
+    /*
+     * Overlay layers can't crop: KAPI only sends srcX/srcY for the main layer,
+     * where they become the head's viewport point in, and NVKMS can't program
+     * a source fetch offset. Fail the commit instead of showing the wrong part
+     * of the framebuffer, so that the compositor can fall back to composition.
+     */
+    if (plane->type == DRM_PLANE_TYPE_OVERLAY &&
+        (plane_state->src_x != 0 || plane_state->src_y != 0)) {
+        return -EINVAL;
+    }
+
     /* Source values are 16.16 fixed point */
     req_config->config.srcX = plane_state->src_x >> 16;
     req_config->config.srcY = plane_state->src_y >> 16;
