@@ -31,6 +31,11 @@
 #include <linux/vmalloc.h>
 #include <linux/sched.h>
 #include <linux/device.h>
+#include <linux/delay.h>
+
+#if !defined(NV_BSD)
+#include <linux/freezer.h>
+#endif
 
 #if defined(NVCPU_AARCH64)
 #include <asm/page.h>
@@ -189,6 +194,18 @@ void nv_drm_workthread_shutdown(nv_drm_workthread *worker)
     nv_kthread_q_stop(&worker->q);
 }
 
+bool nv_drm_workthread_is_shutting_down(nv_drm_workthread *worker)
+{
+    unsigned long flags;
+    bool shutting_down;
+
+    spin_lock_irqsave(&worker->lock, flags);
+    shutting_down = worker->shutting_down;
+    spin_unlock_irqrestore(&worker->lock, flags);
+
+    return shutting_down;
+}
+
 void nv_drm_workthread_work_init(nv_drm_work *work,
                                  void (*callback)(void *),
                                  void *arg)
@@ -208,6 +225,15 @@ int nv_drm_workthread_add_work(nv_drm_workthread *worker, nv_drm_work *work)
     spin_unlock_irqrestore(&worker->lock, flags);
 
     return ret;
+}
+
+void nv_drm_wait_for_resume_sleep(void)
+{
+#if !defined(NV_BSD)
+    /* Does nothing for a kernel thread. A user task must not hold up suspend. */
+    try_to_freeze();
+#endif
+    msleep(20);
 }
 
 void nv_drm_timer_setup(nv_drm_timer *timer, void (*callback)(nv_drm_timer *nv_drm_timer))

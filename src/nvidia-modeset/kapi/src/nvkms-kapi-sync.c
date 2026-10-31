@@ -430,6 +430,16 @@ nvKmsKapiRegisterSemaphoreSurfaceCallback(
         cb->rmCallback.arg = cb;
 
         waiterParams.notificationHandle = (NvUPtr)&cb->rmCallback;
+    } else if (!nvkms_read_trylock_pm_lock_from_kapi()) {
+        /*
+         * RM would fail this with NV_ERR_GPU_NOT_FULL_POWER, and then nothing
+         * would ever write new_value. Let the caller retry after resume.
+         *
+         * Don't wait for the lock here. The caller's work thread can be flushed
+         * by a task that the freezer needs to stop before suspend can go on, and
+         * a reader waiting behind a suspend blocks anything queued after it.
+         */
+        return NVKMS_KAPI_REG_WAITER_NOT_READY;
     }
 
     ret = nvRmApiControl(device->hRmClient,
@@ -437,6 +447,10 @@ nvKmsKapiRegisterSemaphoreSurfaceCallback(
                          NV_SEMAPHORE_SURFACE_CTRL_CMD_REGISTER_WAITER,
                          &waiterParams,
                          sizeof(waiterParams));
+
+    if (pCallback == NULL) {
+        nvkms_read_unlock_pm_lock_from_kapi();
+    }
 
     switch (ret) {
     case NVOS_STATUS_SUCCESS:

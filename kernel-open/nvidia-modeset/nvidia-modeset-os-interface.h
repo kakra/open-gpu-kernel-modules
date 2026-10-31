@@ -392,6 +392,13 @@ NvBool nvkms_ioctl_from_kapi_try_pmlock
  * NVKMS state. Only valid in an ioctl from a kernel-space (KAPI) client, which
  * also holds the NVKMS PM lock, so suspend can't run in between.
  */
+/*
+ * Keep system suspend from starting, without waiting if it already has.
+ * Returns NV_FALSE if a suspend holds or is about to take the PM lock.
+ */
+NvBool nvkms_read_trylock_pm_lock_from_kapi(void);
+void nvkms_read_unlock_pm_lock_from_kapi(void);
+
 void nvkms_drop_global_lock(void);
 void nvkms_retake_global_lock(void);
 
