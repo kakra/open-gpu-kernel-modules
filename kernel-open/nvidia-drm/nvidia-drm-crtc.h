@@ -526,6 +526,31 @@ struct nv_drm_flip *nv_drm_crtc_dequeue_flip(struct nv_drm_crtc *nv_crtc)
 }
 
 /**
+ * nv_drm_crtc_cancel_flip - Remove a flip that NVKMS will never report from
+ * flip_list of crtc. Returns false if an earlier flip's event already dequeued
+ * it, in which case nv_flip must not be dereferenced.
+ */
+static inline bool nv_drm_crtc_cancel_flip(struct nv_drm_crtc *nv_crtc,
+                                           struct nv_drm_flip *nv_flip)
+{
+    struct nv_drm_flip *nv_queued_flip;
+    bool found = false;
+
+    spin_lock(&nv_crtc->flip_list_lock);
+    list_for_each_entry(nv_queued_flip, &nv_crtc->flip_list, list_entry) {
+        if (nv_queued_flip == nv_flip) {
+            list_del(&nv_flip->list_entry);
+            nv_crtc->flips_completed++;
+            found = true;
+            break;
+        }
+    }
+    spin_unlock(&nv_crtc->flip_list_lock);
+
+    return found;
+}
+
+/**
  * nv_drm_crtc_set_flip_kick_time - Set the kick time of a flip that is
  * still in flip_list of crtc.
  *
