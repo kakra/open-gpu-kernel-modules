@@ -4614,6 +4614,36 @@ failed:
     return NULL;
 }
 
+static NvBool GetHeadRaster(struct NvKmsKapiDevice *device,
+                            NvU32 head,
+                            struct NvKmsKapiHeadRaster *pInfo)
+{
+    struct NvKmsQueryHeadRasterParams params = { };
+
+    if (device->hKmsDevice == 0x0) {
+        return NV_FALSE;
+    }
+
+    params.request.deviceHandle = device->hKmsDevice;
+    params.request.dispHandle = device->hKmsDisp;
+    params.request.head = head;
+
+    if (!nvkms_ioctl_from_kapi(device->pKmsOpen,
+                               NVKMS_IOCTL_QUERY_HEAD_RASTER,
+                               &params, sizeof(params)) ||
+        !params.reply.valid) {
+        return NV_FALSE;
+    }
+
+    pInfo->regOffset = params.reply.regOffset;
+    pInfo->firstActiveLine = params.reply.firstActiveLine;
+    pInfo->blankStartLine = params.reply.blankStartLine;
+    pInfo->rasterHeight = params.reply.rasterHeight;
+    pInfo->lineTimeNs = params.reply.lineTimeNs;
+
+    return NV_TRUE;
+}
+
 static void UnregisterVblankIntrCallback(
     struct NvKmsKapiDevice *device,
     const NvU32 head,
@@ -4787,6 +4817,8 @@ NvBool nvKmsKapiGetFunctionsTableInternal
     funcsTable->perfBoost = RmPerfBoost;
 
     funcsTable->getDisplayColorBpc = GetDisplayColorBpc;
+
+    funcsTable->getHeadRaster = GetHeadRaster;
 
     return NV_TRUE;
 }

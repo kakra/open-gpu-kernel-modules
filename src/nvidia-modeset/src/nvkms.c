@@ -50,6 +50,9 @@
 #include "nvkms-flip.h" /* nvFlipEvo */
 
 
+#include "class/clc570.h" /* NVC570_DISPLAY */
+#include "class/clc670.h" /* NVC670_DISPLAY */
+#include "class/clc770.h" /* NVC770_DISPLAY */
 #include "class/clcb70.h" /* NVCB70_DISPLAY */
 
 #include "dp/nvdp-connector.h"
@@ -4902,6 +4905,64 @@ static NvBool RegisterVblankIntrCallback(struct NvKmsPerOpen *pOpen,
     return TRUE;
 }
 
+/*
+ * NV_PDISP_RG_DPCA(head). It has this offset and layout in the manuals of all
+ * these classes; it isn't known for the newer ones.
+ */
+#define NVKMS_RG_DPCA_OFFSET(head) (0x00616330 + ((head) * 2048))
+
+static NvBool QueryHeadRaster(struct NvKmsPerOpen *pOpen,
+                              void *pParamsVoid)
+{
+    struct NvKmsQueryHeadRasterParams *pParams = pParamsVoid;
+    NVDispEvoPtr pDispEvo = GetDispEvo(pOpen, pParams->request.deviceHandle);
+    const NVHwModeTimingsEvo *pTimings;
+    NvU32 dispClass, head;
+
+    if (pDispEvo == NULL) {
+        return FALSE;
+    }
+
+    if (pOpen->clientType != NVKMS_CLIENT_KERNEL_SPACE) {
+        return FALSE;
+    }
+
+    if (pParams->request.head >= NVKMS_MAX_HEADS_PER_DISP) {
+        return FALSE;
+    }
+
+    dispClass = pDispEvo->pDevEvo->dispClass;
+    pParams->reply.valid = FALSE;
+
+    if ((dispClass != NVC570_DISPLAY) &&
+        (dispClass != NVC670_DISPLAY) &&
+        (dispClass != NVC770_DISPLAY)) {
+        return TRUE;
+    }
+
+    head = nvGetPrimaryHwHead(pDispEvo, pParams->request.head);
+    if ((head == NV_INVALID_HEAD) || !nvHeadIsActive(pDispEvo, head)) {
+        return TRUE;
+    }
+
+    pTimings = &pDispEvo->headState[head].timings;
+
+    if (pTimings->doubleScan || (pTimings->pixelClockHz == 0)) {
+        return TRUE;
+    }
+
+    pParams->reply.regOffset = NVKMS_RG_DPCA_OFFSET(head);
+    pParams->reply.firstActiveLine = pTimings->rasterBlankEnd.y + 1;
+    pParams->reply.blankStartLine = pTimings->rasterBlankStart.y;
+    pParams->reply.rasterHeight = pTimings->rasterSize.y;
+    pParams->reply.lineTimeNs =
+        ((NvU64)pTimings->rasterSize.x * 1000000000ULL) /
+        pTimings->pixelClockHz;
+    pParams->reply.valid = TRUE;
+
+    return TRUE;
+}
+
 static NvBool UnregisterVblankIntrCallback(struct NvKmsPerOpen *pOpen,
                                            void *pParamsVoid)
 {
@@ -5095,6 +5156,7 @@ NvBool nvKmsIoctl(
         ENTRY(NVKMS_IOCTL_UNREGISTER_VBLANK_INTR_CALLBACK, UnregisterVblankIntrCallback),
         ENTRY(NVKMS_IOCTL_GET_NEXT_EVENTS, GetNextEvents),
         ENTRY(NVKMS_IOCTL_MST_I2C_TRANSFER, MstI2cTransfer),
+        ENTRY(NVKMS_IOCTL_QUERY_HEAD_RASTER, QueryHeadRaster),
     };
 
     struct NvKmsPerOpen *pOpen = pOpenVoid;
