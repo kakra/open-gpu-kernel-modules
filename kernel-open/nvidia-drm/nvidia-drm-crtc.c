@@ -1567,7 +1567,8 @@ plane_req_config_update(struct drm_plane *plane,
                                &matrix_overrides_changed);
     req_config->flags.matrixOverridesChanged = matrix_overrides_changed;
 
-    if (nv_drm_plane_state->degamma_changed || crtc_state->color_mgmt_changed) {
+    if (nv_drm_plane_state->degamma_changed || crtc_state->color_mgmt_changed ||
+        (plane->state->crtc != plane_state->crtc)) {
         ilut_rebuilt = true;
         if (nv_drm_plane_state->degamma_drm_lut_surface != NULL) {
             kref_put(&nv_drm_plane_state->degamma_drm_lut_surface->base.refcount,
@@ -1595,7 +1596,7 @@ plane_req_config_update(struct drm_plane *plane,
     /*
      * Update the ILUT configuration if:
      * - the ILUT surface was rebuilt above (degamma properties or the CRTC
-     *   color management changed), OR
+     *   color management changed, or the plane moved to another CRTC), OR
      * - plane is being re-enabled and old req_config had ILUT disabled
      *   but DRM plane state has ILUT (blob ID didn't change, but NVKMS
      *   needs to be notified)
