@@ -958,6 +958,7 @@ VrrUnstallTimer(void *dataPtr, NvU32 dataU32)
     NVDispEvoPtr pDispEvo = dataPtr;
 
     VrrUnstallNow(pDispEvo);
+    nvkms_free_timer(pDispEvo->vrr.unstallTimer);
     pDispEvo->vrr.unstallTimer = NULL;
 }
 
