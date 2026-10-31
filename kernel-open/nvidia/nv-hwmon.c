@@ -54,6 +54,14 @@
 #define NV_HWMON_FRESH_WAIT_MS      1500
 #define NV_HWMON_FRESH_POLL_MS      50
 
+/*
+ * GSP rewrites the RUSD fields at every poll, and a read during that gives up
+ * on the field after a few immediate tries. Measured at up to ~160 us per poll.
+ */
+#define NV_HWMON_WRITE_RETRIES      5
+#define NV_HWMON_WRITE_RETRY_MIN_US 200
+#define NV_HWMON_WRITE_RETRY_MAX_US 400
+
 #define NV_HWMON_PROBE_DELAY        (HZ)
 #define NV_HWMON_PROBE_TRIES        5
 #define NV_HWMON_RETRY_DELAY        (10 * HZ)
@@ -149,6 +157,7 @@ static int nv_hwmon_get(nv_linux_state_t *nvl, nv_hwmon_sensor_t sensor, long *v
     nv_hwmon_reading_t readings[NV_HWMON_SENSOR_COUNT];
     NvU64 heartbeat;
     NvBool wait = NV_FALSE;
+    unsigned int retries = 0;
     int rc;
 
     if (hw->stopping)
@@ -228,6 +237,17 @@ static int nv_hwmon_get(nv_linux_state_t *nvl, nv_hwmon_sensor_t sensor, long *v
     }
 
 out:
+    while ((readings[sensor].timestamp == 0) && (retries++ < NV_HWMON_WRITE_RETRIES))
+    {
+        usleep_range(NV_HWMON_WRITE_RETRY_MIN_US, NV_HWMON_WRITE_RETRY_MAX_US);
+
+        rc = nv_hwmon_snapshot(nvl, readings, &heartbeat);
+        if (rc != 0)
+        {
+            return rc;
+        }
+    }
+
     if (readings[sensor].timestamp == 0)
     {
         return -ENODATA;
