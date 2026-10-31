@@ -2903,6 +2903,7 @@ TryToDoPostFlipIMP(void *dataPtr, NvU32 dataU32)
     NvU32 head, sd;
     NVDispEvoPtr pDispEvo;
 
+    nvkms_free_timer(pDevEvo->postFlipIMPTimer);
     pDevEvo->postFlipIMPTimer = NULL;
 
     FOR_ALL_EVO_DISPLAYS(pDispEvo, sd, pDevEvo) {

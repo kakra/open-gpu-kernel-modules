@@ -8894,6 +8894,10 @@ static void GpuCpuTimeDiffRefreshTimerFired(void *dataPtr, NvU32 dataU32)
     NvU32 dispIndex, apiHead;
     NvBool vblankActive = FALSE;
 
+    /* First free the timer that triggered us. */
+    nvkms_free_timer(pDevEvo->gpuCpuTimeDiffRefreshTimer);
+    pDevEvo->gpuCpuTimeDiffRefreshTimer = NULL;
+
     /* Update the GPU-CPU time difference */
     nvUpdateGpuCpuTimeDiff(pDevEvo);
 
@@ -8915,9 +8919,6 @@ static void GpuCpuTimeDiffRefreshTimerFired(void *dataPtr, NvU32 dataU32)
         pDevEvo->gpuCpuTimeDiffRefreshTimer =
             nvkms_alloc_timer(GpuCpuTimeDiffRefreshTimerFired, pDevEvo, 0,
                              GPU_CPU_TIME_DIFF_REFRESH_PERIOD_USEC);
-    } else {
-        /* No active vblank callbacks, stop the timer */
-        pDevEvo->gpuCpuTimeDiffRefreshTimer = NULL;
     }
 }
 
