@@ -68,6 +68,7 @@ NvBool nvInitHdmiLibrary(NVDevEvoRec *pDevEvo);
 void nvTeardownHdmiLibrary(NVDevEvoRec *pDevEvo);
 
 NvBool nvHdmiFrlAssessLink(NVDpyEvoPtr pDpyEvo);
+NvBool nvHdmiFrlRestoreTrainedCaps(NVDpyEvoPtr pDpyEvo);
 NvBool nvHdmiDpySupportsFrl(const NVDpyEvoRec *pDpyEvo);
 NvBool nvHdmiFrlQueryConfigOneColorFormatAndBpc(const NVDpyEvoRec *pDpyEvo,
                                                const NvModeTimings *pModeTimings,

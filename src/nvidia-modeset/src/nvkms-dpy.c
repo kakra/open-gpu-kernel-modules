@@ -778,6 +778,16 @@ static void ReadAndApplyEdidEvo(
             nvDpyProbeMaxPixelClock(pDpyEvo);
         } else if (nvDpyIsHdmiEvo(pDpyEvo) &&
             nvHdmiDpySupportsFrl(pDpyEvo) &&
+            pDpyEvo->hdmi.frlCapsRestored &&
+            (pDpyEvo->apiHead == NV_INVALID_HEAD)) {
+            /*
+             * The FRL caps are left from an earlier link training because the
+             * link couldn't be assessed. Try again while the display is off;
+             * for a display in use, its next modeset's link training decides.
+             */
+            nvDpyProbeMaxPixelClock(pDpyEvo);
+        } else if (nvDpyIsHdmiEvo(pDpyEvo) &&
+            nvHdmiDpySupportsFrl(pDpyEvo) &&
             pDpyEvo->hdmi.reassessFrlLinkCaps) {
             /*
              * Although there’s no change in EDID and no hotplug, if there was 
@@ -987,11 +997,15 @@ void nvDpyProbeMaxPixelClock(NVDpyEvoPtr pDpyEvo)
                  * those driving heads, we don't need to exclude RM from
                  * selecting any SOR, so an sorExcludeMask of 0 is appropriate.
                  */
-                if (nvAssignSOREvo(pConnectorEvo,
+                const NvBool frlPossible =
+                    nvAssignSOREvo(pConnectorEvo,
                                    nvDpyIdToNvU32(pConnectorEvo->displayId),
                                    FALSE /* b2Heads1Or */,
-                                   0 /* sorExcludeMask */) &&
-                    nvHdmiFrlAssessLink(pDpyEvo)) {
+                                   0 /* sorExcludeMask */) ?
+                    nvHdmiFrlAssessLink(pDpyEvo) :
+                    nvHdmiFrlRestoreTrainedCaps(pDpyEvo);
+
+                if (frlPossible) {
                     /*
                      * Note that although we "assessed" the link above, the
                      * maximum pixel clock set here doesn't take that into

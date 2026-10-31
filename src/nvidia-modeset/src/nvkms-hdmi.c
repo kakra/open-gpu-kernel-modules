@@ -2170,14 +2170,84 @@ NvBool nvInitHdmiLibrary(NVDevEvoRec *pDevEvo)
     return TRUE;
 }
 
+/* Failed link trainings of modesets in a row to report to the clients. */
+#define MAX_REPORTED_FRL_LINK_FAILURES 3
+
+static void SaveTrainedFrlCaps(NVDpyEvoPtr pDpyEvo)
+{
+    const NVEdidRec *pEdid = &pDpyEvo->edid;
+
+    pDpyEvo->hdmi.lastTrainedFrl.valid = FALSE;
+
+    if ((pEdid->buffer == NULL) ||
+        (pEdid->length > sizeof(pDpyEvo->hdmi.lastTrainedFrl.edid))) {
+        return;
+    }
+
+    pDpyEvo->hdmi.lastTrainedFrl.srcCaps = pDpyEvo->hdmi.srcCaps;
+    pDpyEvo->hdmi.lastTrainedFrl.sinkCaps = pDpyEvo->hdmi.sinkCaps;
+    pDpyEvo->hdmi.lastTrainedFrl.edidLength = pEdid->length;
+    nvkms_memcpy(pDpyEvo->hdmi.lastTrainedFrl.edid, pEdid->buffer,
+                 pEdid->length);
+    pDpyEvo->hdmi.lastTrainedFrl.valid = TRUE;
+}
+
+/*
+ * Go back to the caps of the last successful link training when the link can't
+ * be assessed. A sink that just woke up may not be ready for link training for
+ * a while, and without FRL caps its FRL-only modes would be gone from the mode
+ * list until the display is probed again.
+ *
+ * The caps stay in use while modesets are failing, because a retry gives a slow
+ * sink more time. Stop after the last failure that is reported, so that clients
+ * can fall back to TMDS on a link that really is dead.
+ *
+ * Returns true if the caps were restored, and false otherwise.
+ */
+NvBool nvHdmiFrlRestoreTrainedCaps(NVDpyEvoPtr pDpyEvo)
+{
+    const NVEdidRec *pEdid = &pDpyEvo->edid;
+    const NvBool wasRestored = pDpyEvo->hdmi.frlCapsRestored;
+
+    pDpyEvo->hdmi.frlCapsRestored = FALSE;
+
+    if (pDpyEvo->hdmi.frlLinkFailures >= MAX_REPORTED_FRL_LINK_FAILURES) {
+        pDpyEvo->hdmi.lastTrainedFrl.valid = FALSE;
+    }
+
+    /* The sink caps come from the EDID, so they only apply to the same EDID. */
+    if (!pDpyEvo->hdmi.lastTrainedFrl.valid ||
+        (pEdid->buffer == NULL) ||
+        (pEdid->length != pDpyEvo->hdmi.lastTrainedFrl.edidLength) ||
+        (nvkms_memcmp(pEdid->buffer, pDpyEvo->hdmi.lastTrainedFrl.edid,
+                      pEdid->length) != 0)) {
+        return FALSE;
+    }
+
+    pDpyEvo->hdmi.srcCaps = pDpyEvo->hdmi.lastTrainedFrl.srcCaps;
+    pDpyEvo->hdmi.sinkCaps = pDpyEvo->hdmi.lastTrainedFrl.sinkCaps;
+    pDpyEvo->hdmi.frlCapsRestored = TRUE;
+
+    if (!wasRestored) {
+        nvEvoLogDisp(pDpyEvo->pDispEvo, EVO_LOG_WARN,
+                     "HDMI FRL link assessment failed, "
+                     "keeping the caps of the last link training.");
+    }
+
+    return TRUE;
+}
+
 /*
  * Call the HDMI library to "assess" the link.  This basically does link
  * training to see what the maximum lane configuration is.  We do this when the
  * monitor is connected after reading the EDID, so we can validate modes
  * against the link capabilities.
  *
- * Returns true if the link was assessed to be capable of FRL, and false
- * otherwise.
+ * If that fails, the caps of the last successful link training may be restored,
+ * see nvHdmiFrlRestoreTrainedCaps().
+ *
+ * Returns true if the link was assessed to be capable of FRL or the caps were
+ * restored, and false otherwise.
  */
 NvBool nvHdmiFrlAssessLink(NVDpyEvoPtr pDpyEvo)
 {
@@ -2221,10 +2291,22 @@ NvBool nvHdmiFrlAssessLink(NVDpyEvoPtr pDpyEvo)
                                          &pDpyEvo->hdmi.sinkCaps);
     if (ret != NVHDMIPKT_SUCCESS) {
         nvAssert(ret == NVHDMIPKT_SUCCESS);
-        return FALSE;
+        return nvHdmiFrlRestoreTrainedCaps(pDpyEvo);
     }
 
-    return pDpyEvo->hdmi.sinkCaps.linkMaxFRLRate != HDMI_FRL_DATA_RATE_NONE;
+    if (pDpyEvo->hdmi.sinkCaps.linkMaxFRLRate == HDMI_FRL_DATA_RATE_NONE) {
+        /* The library reports success when training failed at every rate. */
+        return bPerformLinkTrainingToAssess ?
+            nvHdmiFrlRestoreTrainedCaps(pDpyEvo) : FALSE;
+    }
+
+    pDpyEvo->hdmi.frlCapsRestored = FALSE;
+
+    if (bPerformLinkTrainingToAssess) {
+        SaveTrainedFrlCaps(pDpyEvo);
+    }
+
+    return TRUE;
 }
 
 /*
@@ -2825,7 +2907,6 @@ static void HandleFrlLinkTrainingResult(NVDispEvoPtr pDispEvo,
                                         const NVConnectorEvoRec *pConnectorEvo,
                                         NvBool trained)
 {
-    const NvU8 MAX_REPORTED_FAILURES = 3;
     NVDpyEvoPtr pDpyEvo =
         nvGetDpyEvoFromDispEvo(pDispEvo, pConnectorEvo->displayId);
 
@@ -2835,10 +2916,12 @@ static void HandleFrlLinkTrainingResult(NVDispEvoPtr pDispEvo,
 
     if (trained) {
         pDpyEvo->hdmi.frlLinkFailures = 0;
+        /* Training at the mode's rate confirms restored caps well enough. */
+        pDpyEvo->hdmi.frlCapsRestored = FALSE;
         return;
     }
 
-    if (pDpyEvo->hdmi.frlLinkFailures >= MAX_REPORTED_FAILURES) {
+    if (pDpyEvo->hdmi.frlLinkFailures >= MAX_REPORTED_FRL_LINK_FAILURES) {
         return;
     }
 

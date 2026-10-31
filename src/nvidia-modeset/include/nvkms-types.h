@@ -2415,7 +2415,22 @@ typedef struct _NVDpyEvoRec {
         HDMI_SRC_CAPS srcCaps;
         HDMI_SINK_CAPS sinkCaps;
         NvBool reassessFrlLinkCaps             : 1;
+        /* srcCaps and sinkCaps came from lastTrainedFrl, not an assessment. */
+        NvBool frlCapsRestored                 : 1;
         NvU8 frlLinkFailures;
+
+        /*
+         * The caps of the last link training that succeeded, and the EDID they
+         * apply to: a sink may not be ready for link training yet when it
+         * wakes up.
+         */
+        struct {
+            NvBool valid;
+            HDMI_SRC_CAPS srcCaps;
+            HDMI_SINK_CAPS sinkCaps;
+            size_t edidLength;
+            NvU8 edid[NVKMS_EDID_BUFFER_SIZE];
+        } lastTrainedFrl;
     } hdmi;
 
     struct {
