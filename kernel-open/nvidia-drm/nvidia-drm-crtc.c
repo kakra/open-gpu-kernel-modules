@@ -2473,6 +2473,13 @@ static inline bool nv_drm_crtc_duplicate_req_head_modeset_config(
     for (i = 0; i < ARRAY_SIZE(old->layerRequestedConfig); i++) {
         new->layerRequestedConfig[i].config =
             old->layerRequestedConfig[i].config;
+        /*
+         * These belong to the commit that set them. A modeset sends the config
+         * of planes that aren't part of its commit too, and would wait on an
+         * old semaphore.
+         */
+        memset(&new->layerRequestedConfig[i].config.syncParams, 0,
+               sizeof(new->layerRequestedConfig[i].config.syncParams));
     }
 
     return true;
