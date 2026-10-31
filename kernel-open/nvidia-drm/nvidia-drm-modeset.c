@@ -461,6 +461,51 @@ __nv_drm_crtc_has_unsignaled_in_fence(nv_drm_atomic_state_base_t *state,
     return false;
 }
 
+/*
+ * A commit failed before NVKMS flipped anything, so no flip events will arrive
+ * for it. Give every CRTC its flip object back with its event, for
+ * nv_drm_atomic_commit() to process like a flip without a hardware flip event.
+ * Otherwise flip_list stays non-empty, failing nonblocking commits with -EBUSY
+ * until a blocking commit times out, and the events are never sent.
+ */
+static void
+__nv_drm_cancel_flips(struct drm_device *dev,
+                      nv_drm_atomic_state_base_t *state,
+                      struct nv_drm_flip **enqueued_flips)
+{
+    struct nv_drm_device *nv_dev = to_nv_device(dev);
+    struct drm_crtc *crtc;
+    struct drm_crtc_state *new_crtc_state;
+    int i;
+
+    for_each_new_crtc_in_state(state, crtc, new_crtc_state, i) {
+        struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
+        struct nv_drm_crtc_state *nv_new_crtc_state =
+            to_nv_crtc_state(new_crtc_state);
+        struct nv_drm_flip *nv_flip = enqueued_flips[nv_crtc->head];
+
+        if (nv_flip == NULL) {
+            /* The commit may not have reached this CRTC */
+            if (new_crtc_state->event != NULL) {
+                nv_new_crtc_state->nv_flip->event = new_crtc_state->event;
+                new_crtc_state->event = NULL;
+            }
+            continue;
+        }
+
+        spin_lock(&dev->event_lock);
+        if (nv_drm_crtc_cancel_flip(nv_crtc, nv_flip)) {
+            if (nv_drm_vblank_module_param && nv_flip->event != NULL) {
+                drm_crtc_vblank_put(crtc);
+            }
+            nv_new_crtc_state->nv_flip = nv_flip;
+        }
+        spin_unlock(&dev->event_lock);
+    }
+
+    wake_up_all(&nv_dev->flip_event_wq);
+}
+
 static int
 nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
                                    nv_drm_atomic_state_base_t *state,
@@ -474,6 +519,7 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
     struct drm_crtc_state *old_crtc_state, *new_crtc_state;
     struct nv_drm_flip *submitted_flips[NVKMS_KAPI_MAX_HEADS];
     struct nv_drm_crtc *submitted_crtcs[NVKMS_KAPI_MAX_HEADS];
+    struct nv_drm_flip *enqueued_flips[NVKMS_KAPI_MAX_HEADS] = { };
     int num_submitted_flips = 0;
     bool raster_changes = false;
     bool applied;
@@ -503,6 +549,7 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
         ret = drm_atomic_helper_prepare_planes(dev, state);
 
         if (ret) {
+            __nv_drm_cancel_flips(dev, state, enqueued_flips);
             return ret;
         }
     }
@@ -566,6 +613,7 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
                 nv_drm_crtc_enqueue_flip(nv_crtc,
                                          nv_new_crtc_state->nv_flip);
 
+                enqueued_flips[nv_crtc->head] = nv_new_crtc_state->nv_flip;
                 nv_new_crtc_state->nv_flip = NULL;
             }
 
@@ -575,6 +623,7 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
                                              new_crtc_state);
 
             if (ret != 0) {
+                __nv_drm_cancel_flips(dev, state, enqueued_flips);
                 return ret;
             }
         }
@@ -636,6 +685,9 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
     }
 
     if (!applied) {
+        if (commit) {
+            __nv_drm_cancel_flips(dev, state, enqueued_flips);
+        }
         return -EINVAL;
     }
 
@@ -1203,9 +1255,6 @@ int nv_drm_atomic_commit(struct drm_device *dev,
             nv_dev,
             "Failed to apply atomic modeset.  Error code: %d",
             ret);
-
-        nv_drm_queue_held_fbs(nv_dev, &held_fbs);
-        goto done;
     }
 
     nv_drm_queue_held_fbs(nv_dev, &held_fbs);
@@ -1303,8 +1352,6 @@ int nv_drm_atomic_commit(struct drm_device *dev,
             }
         }
     }
-
-done:
 
     /*
      * State will be freed when the caller drops its reference after we return.
