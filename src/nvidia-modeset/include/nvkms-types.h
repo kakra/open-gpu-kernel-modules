@@ -2109,6 +2109,19 @@ typedef struct _NVDispVblankApiHeadState {
 
 } NVDispVblankApiHeadState;
 
+typedef struct _NVVrrLfcState {
+    nvkms_timer_handle_t *repeatTimer;
+    NvU64 lastFlipUs;
+    NvU64 lastRepeatUs;
+    NvU64 backoffUntilUs;
+    NvU32 lastIntervalUs;
+    NvU32 frameUs;
+    NvU32 multiplier;
+    NvU32 repeatsLeft;
+    NvU32 collisions;
+    NvBool active;
+} NVVrrLfcState;
+
 typedef struct _NVDispEvoRec {
     NvU8       gpuLogIndex;
     NVDevEvoPtr pDevEvo;
@@ -2163,6 +2176,9 @@ typedef struct _NVDispEvoRec {
         NvBool hasPlatformCookie;
 
         nvkms_timer_handle_t *unstallTimer;
+
+        // Low framerate compensation state, per apiHead.
+        NVVrrLfcState lfc[NVKMS_MAX_HEADS_PER_DISP];
     } vrr;
 
     NVFrameLockEvoPtr pFrameLockEvo;
