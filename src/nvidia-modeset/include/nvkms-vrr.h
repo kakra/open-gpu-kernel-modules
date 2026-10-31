@@ -44,6 +44,9 @@ void nvAdjustHwModeTimingsForVrrEvo(
 
 void nvDisableVrr(NVDevEvoPtr pDevEvo);
 void nvEnableVrr(NVDevEvoPtr pDevEvo);
+void nvVrrLfcNotifyFlip(NVDispEvoPtr pDispEvo, const NvU32 apiHead,
+                        const NvBool tearing);
+void nvVrrLfcCancel(NVDevEvoPtr pDevEvo);
 void nvCancelVrrFrameReleaseTimers(NVDevEvoPtr pDevEvo,
                                    const NvU32 applyAllowVrrApiHeadMask);
 void nvSetVrrActive(NVDevEvoPtr pDevEvo,

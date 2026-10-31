@@ -405,6 +405,8 @@ void nvDisableVrr(NVDevEvoPtr pDevEvo)
     NvU32 apiHead, head, dispIndex;
     NVDispHeadStateEvoRec *pHeadState;
 
+    nvVrrLfcCancel(pDevEvo);
+
     FOR_ALL_EVO_DISPLAYS(pDispEvo, dispIndex, pDevEvo) {
         for (head = 0; head < pDevEvo->numHeads; head++) {
             pHeadState = &pDispEvo->headState[head];
@@ -957,6 +959,305 @@ VrrUnstallTimer(void *dataPtr, NvU32 dataU32)
 
     VrrUnstallNow(pDispEvo);
     pDispEvo->vrr.unstallTimer = NULL;
+}
+
+/*
+ * Low framerate compensation (LFC).
+ *
+ * Below the display's minimum refresh rate, the hardware repeats the current
+ * frame when SET_DISPLAY_RATE's MIN_REFRESH_INTERVAL expires, however close the
+ * next frame is. A flip that arrives during that scanout has to wait for it to
+ * finish.
+ *
+ * So, when the frame rate gets close to the minimum, predict that the next
+ * frame takes as long as the last one and repeat the current frame at even
+ * intervals, leaving the scanout idle when the next frame is due. The hardware
+ * timer stays armed, so a frame that takes longer than predicted is no worse
+ * off than without LFC. LFC needs a maximum refresh rate of at least twice the
+ * minimum, to have an interval to repeat at.
+ *
+ * The thresholds and the choice of multiplier follow amdgpu's
+ * apply_below_the_range(), with these differences, because the repeats are timed
+ * by software and a wrong repeat costs a real frame up to a whole scanout:
+ *
+ *  - Predict with the shorter of the last two frames, so that a single slow
+ *    frame or uneven frame pacing falls back to the hardware timer.
+ *  - Don't repeat while the last flip is still pending, e.g. on an acquire
+ *    fence: it would show up during that repeat's scanout.
+ *  - Stop for a while if new frames keep arriving during repeats, like amdgpu's
+ *    flip interval workaround stops varying the refresh rate.
+ */
+#define NVKMS_VRR_LFC_MAX_MARGIN_US   2500
+#define NVKMS_VRR_LFC_DRIFT_MARGIN_US 2000
+#define NVKMS_VRR_LFC_GUARD_US        1000
+#define NVKMS_VRR_LFC_MAX_FRAME_US    200000
+#define NVKMS_VRR_LFC_MAX_COLLISIONS  5
+#define NVKMS_VRR_LFC_BACKOFF_US      2000000
+#define NVKMS_VRR_LFC_TIMER_SLACK_US  1000
+
+static NvU32 LfcMidPointDelta(const NvU32 frameUs, const NvU32 multiplier,
+                              const NvU32 midPointUs)
+{
+    const NvU32 intervalUs = frameUs / multiplier;
+
+    return (intervalUs > midPointUs) ? (intervalUs - midPointUs) :
+                                       (midPointUs - intervalUs);
+}
+
+/*!
+ * Choose how many refreshes to split a frame into.
+ *
+ * \param[in] frameUs     The duration of the frame.
+ * \param[in] minUs       The duration of a refresh at the maximum refresh rate.
+ * \param[in] maxUs       The duration of a refresh at the minimum refresh rate.
+ * \param[in] maxFrameUs  The frame duration that LFC is centered on.
+ * \param[in] current     The current multiplier, or 0 if there is none.
+ *
+ * \return  The number of refreshes; less than 2 means no repeats.
+ */
+static NvU32 LfcChooseMultiplier(const NvU32 frameUs, const NvU32 minUs,
+                                 const NvU32 maxUs, const NvU32 maxFrameUs,
+                                 const NvU32 current)
+{
+    const NvU32 midPointUs = (minUs + maxUs) / 2;
+    const NvU32 minIntervalUs = minUs + NVKMS_VRR_LFC_GUARD_US;
+    const NvU32 ceil = (frameUs + midPointUs - 1) / midPointUs;
+    const NvU32 floor = frameUs / midPointUs;
+    const NvU32 ceilDelta = LfcMidPointDelta(frameUs, ceil, midPointUs);
+    const NvU32 floorDelta = (floor != 0) ?
+        LfcMidPointDelta(frameUs, floor, midPointUs) : NV_U32_MAX;
+    const NvU32 deltaDiff = (ceilDelta > floorDelta) ?
+        (ceilDelta - floorDelta) : (floorDelta - ceilDelta);
+    NvU32 multiplier;
+
+    if ((frameUs / ceil) < minIntervalUs) {
+        multiplier = floor;
+    } else if (floor < 2) {
+        multiplier = ceil;
+    } else if (ceilDelta < floorDelta) {
+        multiplier = ceil;
+    } else {
+        multiplier = floor;
+    }
+
+    // Prefer the current multiplier, unless it has drifted too far.
+    if ((current != 0) &&
+        (deltaDiff < NVKMS_VRR_LFC_DRIFT_MARGIN_US) &&
+        ((frameUs / current) < maxFrameUs) &&
+        ((frameUs / current) >= minIntervalUs)) {
+        multiplier = current;
+    }
+
+    while ((multiplier > 1) && ((frameUs / multiplier) < minIntervalUs)) {
+        multiplier--;
+    }
+
+    return multiplier;
+}
+
+/*!
+ * Get the range of refresh durations, if the apiHead can use LFC.
+ */
+static NvBool LfcGetRefreshRange(const NVDispEvoRec *pDispEvo,
+                                 const NvU32 apiHead,
+                                 NvU32 *pMinUs, NvU32 *pMaxUs)
+{
+    const NvU32 head =
+        nvGetPrimaryHwHeadFromMask(pDispEvo->apiHeadState[apiHead].hwHeadsMask);
+    const NVHwModeTimingsEvo *pTimings;
+
+    if ((head == NV_INVALID_HEAD) ||
+        !pDispEvo->apiHeadState[apiHead].vrr.active) {
+        return FALSE;
+    }
+
+    pTimings = &pDispEvo->headState[head].timings;
+
+    if ((pTimings->vrr.timeoutMicroseconds == 0) ||
+        (pTimings->pixelClock == 0)) {
+        return FALSE;
+    }
+
+    *pMaxUs = pTimings->vrr.timeoutMicroseconds;
+    *pMinUs = axb_div_c_64(pTimings->rasterSize.y * 1000ULL,
+                           pTimings->rasterSize.x, pTimings->pixelClock);
+
+    return (*pMinUs != 0) && (*pMaxUs >= (*pMinUs * 2));
+}
+
+/*!
+ * Return whether a flip on the main layer of the apiHead is still pending.
+ */
+static NvBool LfcFlipPending(NVDispEvoPtr pDispEvo, const NvU32 apiHead)
+{
+    NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
+    NvU32 head;
+
+    FOR_EACH_EVO_HW_HEAD_IN_MASK(pDispEvo->apiHeadState[apiHead].hwHeadsMask, head) {
+        NvBool isIdle = FALSE;
+
+        if (!pDevEvo->hal->IsChannelIdle(pDevEvo,
+                                         pDevEvo->head[head].layer[NVKMS_MAIN_LAYER],
+                                         pDispEvo->displayOwner, &isIdle) ||
+            !isIdle) {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+static void LfcRepeatTimer(void *dataPtr, NvU32 apiHead);
+
+/*!
+ * Schedule the next repeat, relative to the flip so that late timers don't add
+ * up: a repeat that ends up skipped lets the hardware timer run out instead,
+ * possibly just before the next frame.
+ */
+static void LfcScheduleRepeat(NVDispEvoPtr pDispEvo, const NvU32 apiHead,
+                              const NvU64 nowUs, const NvU64 earliestUs)
+{
+    NVVrrLfcState *pLfc = &pDispEvo->vrr.lfc[apiHead];
+    const NvU64 targetUs =
+        NV_MAX(pLfc->lastFlipUs +
+               (((NvU64)(pLfc->multiplier - pLfc->repeatsLeft) * pLfc->frameUs) /
+                pLfc->multiplier),
+               earliestUs);
+
+    pLfc->repeatTimer =
+        nvkms_alloc_timer(LfcRepeatTimer, pDispEvo, apiHead,
+                          (targetUs > (nowUs + NVKMS_VRR_LFC_TIMER_SLACK_US)) ?
+                              (targetUs - nowUs - NVKMS_VRR_LFC_TIMER_SLACK_US) : 0);
+}
+
+static void LfcRepeatTimer(void *dataPtr, NvU32 apiHead)
+{
+    NVDispEvoPtr pDispEvo = dataPtr;
+    NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
+    NVVrrLfcState *pLfc = &pDispEvo->vrr.lfc[apiHead];
+    NvU32 minUs, maxUs, head;
+    NvU64 nowUs;
+
+    nvkms_free_timer(pLfc->repeatTimer);
+    pLfc->repeatTimer = NULL;
+
+    if (!nvkms_vrr_lfc() ||
+        !LfcGetRefreshRange(pDispEvo, apiHead, &minUs, &maxUs)) {
+        return;
+    }
+
+    if (LfcFlipPending(pDispEvo, apiHead)) {
+        nvkms_vrr_lfc_event(apiHead, NVKMS_VRR_LFC_EVENT_SKIP_FLIP_PENDING);
+        return;
+    }
+
+    // If this timer ran late, a repeat could collide with the next frame.
+    nowUs = nvkms_get_usec();
+    if ((nowUs + minUs + NVKMS_VRR_LFC_GUARD_US) >
+        (pLfc->lastFlipUs + pLfc->frameUs)) {
+        nvkms_vrr_lfc_event(apiHead, NVKMS_VRR_LFC_EVENT_SKIP_LATE);
+        return;
+    }
+
+    FOR_EACH_EVO_HW_HEAD_IN_MASK(pDispEvo->apiHeadState[apiHead].hwHeadsMask, head) {
+        if (nvHeadIsActive(pDispEvo, head)) {
+            pDevEvo->cursorHal->ReleaseElv(pDevEvo, head);
+        }
+    }
+
+    pLfc->lastRepeatUs = nowUs;
+    nvkms_vrr_lfc_event(apiHead, NVKMS_VRR_LFC_EVENT_REPEAT);
+
+    if (--pLfc->repeatsLeft > 0) {
+        LfcScheduleRepeat(pDispEvo, apiHead, nowUs,
+                          nowUs + minUs + NVKMS_VRR_LFC_GUARD_US);
+    }
+}
+
+/*!
+ * Update LFC for a flip with a new frame on an apiHead.
+ */
+void nvVrrLfcNotifyFlip(NVDispEvoPtr pDispEvo, const NvU32 apiHead,
+                        const NvBool tearing)
+{
+    NVVrrLfcState *pLfc = &pDispEvo->vrr.lfc[apiHead];
+    const NvU64 nowUs = nvkms_get_usec();
+    const NvU64 intervalUs = nowUs - pLfc->lastFlipUs;
+    const NvU64 lastRepeatUs = pLfc->lastRepeatUs;
+    const NvU32 prevIntervalUs = pLfc->lastIntervalUs;
+    NvU32 minUs = 0, maxUs = 0, marginUs, maxFrameUs;
+    const NvBool haveRange =
+        LfcGetRefreshRange(pDispEvo, apiHead, &minUs, &maxUs);
+
+    nvkms_free_timer(pLfc->repeatTimer);
+    pLfc->repeatTimer = NULL;
+    pLfc->repeatsLeft = 0;
+    pLfc->lastRepeatUs = 0;
+    pLfc->lastIntervalUs =
+        ((pLfc->lastFlipUs != 0) && (intervalUs <= NVKMS_VRR_LFC_MAX_FRAME_US)) ?
+            intervalUs : 0;
+    pLfc->lastFlipUs = nowUs;
+
+    if (haveRange && (lastRepeatUs != 0)) {
+        if ((nowUs - lastRepeatUs) >= minUs) {
+            pLfc->collisions = 0;
+        } else {
+            nvkms_vrr_lfc_event(apiHead, NVKMS_VRR_LFC_EVENT_COLLISION);
+
+            if (++pLfc->collisions >= NVKMS_VRR_LFC_MAX_COLLISIONS) {
+                nvkms_vrr_lfc_event(apiHead, NVKMS_VRR_LFC_EVENT_BACKOFF);
+                pLfc->collisions = 0;
+                pLfc->backoffUntilUs = nowUs + NVKMS_VRR_LFC_BACKOFF_US;
+            }
+        }
+    }
+
+    // A tearing flip doesn't have to wait for a scanout to finish.
+    if (!nvkms_vrr_lfc() || tearing || !haveRange ||
+        (pLfc->lastIntervalUs == 0) || (prevIntervalUs == 0) ||
+        (nowUs < pLfc->backoffUntilUs)) {
+        pLfc->active = FALSE;
+        pLfc->multiplier = 0;
+        return;
+    }
+
+    pLfc->frameUs = NV_MIN(pLfc->lastIntervalUs, prevIntervalUs);
+
+    marginUs = NV_MIN(maxUs - (2 * minUs), NVKMS_VRR_LFC_MAX_MARGIN_US);
+    maxFrameUs = maxUs - marginUs;
+
+    if ((pLfc->frameUs + (marginUs / 2)) < maxFrameUs) {
+        pLfc->active = FALSE;
+    } else if (pLfc->frameUs > (maxFrameUs + (marginUs / 2))) {
+        pLfc->active = TRUE;
+    }
+
+    if (!pLfc->active) {
+        pLfc->multiplier = 0;
+        return;
+    }
+
+    pLfc->multiplier = LfcChooseMultiplier(pLfc->frameUs, minUs, maxUs,
+                                           maxFrameUs, pLfc->multiplier);
+
+    if (pLfc->multiplier > 1) {
+        pLfc->repeatsLeft = pLfc->multiplier - 1;
+        LfcScheduleRepeat(pDispEvo, apiHead, nowUs, nowUs);
+    }
+}
+
+void nvVrrLfcCancel(NVDevEvoPtr pDevEvo)
+{
+    NVDispEvoPtr pDispEvo;
+    NvU32 dispIndex, apiHead;
+
+    FOR_ALL_EVO_DISPLAYS(pDispEvo, dispIndex, pDevEvo) {
+        for (apiHead = 0; apiHead < ARRAY_LEN(pDispEvo->vrr.lfc); apiHead++) {
+            nvkms_free_timer(pDispEvo->vrr.lfc[apiHead].repeatTimer);
+            nvkms_memset(&pDispEvo->vrr.lfc[apiHead], 0,
+                         sizeof(pDispEvo->vrr.lfc[apiHead]));
+        }
+    }
 }
 
 /*!

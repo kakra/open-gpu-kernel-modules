@@ -5576,6 +5576,7 @@ void nvFreeCoreChannelEvo(NVDevEvoPtr pDevEvo)
 
     const NvU32 fullApiHeadMask = ~0u;
     nvCancelVrrFrameReleaseTimers(pDevEvo, fullApiHeadMask);
+    nvVrrLfcCancel(pDevEvo);
 
     nvCancelLowerDispBandwidthTimer(pDevEvo);
 

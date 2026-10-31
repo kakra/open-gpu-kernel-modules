@@ -110,6 +110,13 @@ MODULE_PARM_DESC(modeset_changed_heads_only,
                  "When a DRM commit needs a modeset, only modeset the CRTCs that "
                  "need one and flip the others, instead of modesetting all of them");
 
+static bool vrr_lfc = true;
+module_param_named(vrr_lfc, vrr_lfc, bool, 0644);
+MODULE_PARM_DESC(vrr_lfc,
+                 "Low framerate compensation: when the frame rate gets close to the "
+                 "minimum VRR refresh rate, repeat frames at a predicted interval "
+                 "instead of only when the display's minimum refresh rate forces it");
+
 /* These parameters are used for fault injection tests.  Normally the defaults
  * should be used. */
 MODULE_PARM_DESC(fail_malloc, "Fail the Nth call to nvkms_alloc");
@@ -293,6 +300,15 @@ NvBool nvkms_enable_overlay_layers(void)
 NvBool nvkms_modeset_changed_heads_only(void)
 {
     return READ_ONCE(modeset_changed_heads_only);
+}
+
+NvBool nvkms_vrr_lfc(void)
+{
+    return READ_ONCE(vrr_lfc);
+}
+
+noinline void nvkms_vrr_lfc_event(NvU32 apiHead, enum NvKmsVrrLfcEvent event)
+{
 }
 
 NvBool nvkms_debug_logging(void)

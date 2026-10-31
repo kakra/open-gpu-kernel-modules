@@ -3122,6 +3122,32 @@ void nvPostFlip(NVDevEvoRec *pDevEvo,
     nvCancelVrrFrameReleaseTimers(pDevEvo, applyAllowVrrApiHeadMask);
 
     for (sd = 0; sd < pDevEvo->numSubDevices; sd++) {
+        NVDispEvoPtr pDispEvo = pDevEvo->gpus[sd].pDispEvo;
+        NvU32 apiHead;
+
+        if (!pWorkArea->sd[sd].changed || skipUpdate) {
+            continue;
+        }
+
+        // Cursor-only flips don't bring a new frame.
+        for (apiHead = 0; apiHead < pDevEvo->numApiHeads; apiHead++) {
+            const NVFlipEvoHwState *pNewState;
+
+            head = nvGetPrimaryHwHeadFromMask(
+                pDispEvo->apiHeadState[apiHead].hwHeadsMask);
+            if (head == NV_INVALID_HEAD) {
+                continue;
+            }
+
+            pNewState = &pWorkArea->sd[sd].head[head].newState;
+            if (pNewState->dirty.layer[NVKMS_MAIN_LAYER]) {
+                nvVrrLfcNotifyFlip(pDispEvo, apiHead,
+                                   pNewState->layer[NVKMS_MAIN_LAYER].tearing);
+            }
+        }
+    }
+
+    for (sd = 0; sd < pDevEvo->numSubDevices; sd++) {
         if (!pWorkArea->sd[sd].changed) {
             continue;
         }

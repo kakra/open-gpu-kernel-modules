@@ -129,6 +129,19 @@ NvBool nvkms_opportunistic_display_sync(void);
 enum NvKmsDebugForceColorSpace nvkms_debug_force_color_space(void);
 NvBool nvkms_enable_overlay_layers(void);
 NvBool nvkms_modeset_changed_heads_only(void);
+NvBool nvkms_vrr_lfc(void);
+
+/*
+ * What LFC did, for kprobes: functions in the NVKMS core can't be probed.
+ */
+enum NvKmsVrrLfcEvent {
+    NVKMS_VRR_LFC_EVENT_REPEAT = 0,
+    NVKMS_VRR_LFC_EVENT_SKIP_LATE = 1,
+    NVKMS_VRR_LFC_EVENT_SKIP_FLIP_PENDING = 2,
+    NVKMS_VRR_LFC_EVENT_COLLISION = 3,
+    NVKMS_VRR_LFC_EVENT_BACKOFF = 4,
+};
+void nvkms_vrr_lfc_event(NvU32 apiHead, enum NvKmsVrrLfcEvent event);
 NvBool nvkms_debug_logging(void);
 void nvkms_extcon_report_hdmi(NvBool state);
 void nvkms_extcon_report_hdmi_audio(NvBool state);
