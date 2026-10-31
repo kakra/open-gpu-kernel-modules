@@ -452,8 +452,10 @@ hdmiAssessLinkCapabilitiesC671(NVHDMIPKT_CLASS          *pThis,
             pSinkCaps->linkMaxFRLRateDSC = HDMI_FRL_DATA_RATE_NONE;
             return ret;
         }
-    } else if (bAssessedBefore) {
+    } else if (bAssessedBefore && (pSinkCaps->linkMaxFRLRate != HDMI_FRL_DATA_RATE_NONE)) {
         // Without link training the sink's EDID can't raise what training found before.
+        // A link that failed training entirely is the exception: it may have been the
+        // sink that wasn't ready, and a modeset that fails is reported to the clients.
         maxFRLRate = NV_MIN(maxFRLRate, (NvU32)pSinkCaps->linkMaxFRLRate);
     }
 
