@@ -169,8 +169,20 @@ static int __nv_drm_put_back_post_fence_fd(
 struct nv_drm_plane_fence_cb_data {
     struct dma_fence_cb dma_fence_cb;
     struct nv_drm_device *nv_dev;
+    /* Held until the commit knows whether it was applied */
+    struct dma_fence *fence;
     NvU32 semaphore_index;
+    /* One for the fence callback, one for the commit */
+    atomic_t refcount;
 };
+
+static void
+__nv_drm_plane_fence_cb_data_put(struct nv_drm_plane_fence_cb_data *fence_data)
+{
+    if (atomic_dec_and_test(&fence_data->refcount)) {
+        nv_drm_free(fence_data);
+    }
+}
 
 static void
 __nv_drm_plane_fence_cb(
@@ -184,7 +196,53 @@ __nv_drm_plane_fence_cb(
 
     dma_fence_put(fence);
     nvKms->signalDisplaySemaphore(nv_dev->pDevice, fence_data->semaphore_index);
-    nv_drm_free(fence_data);
+    __nv_drm_plane_fence_cb_data_put(fence_data);
+}
+
+/*
+ * Drop the commit's references on the fence callbacks of its planes. If the
+ * commit failed, no flip will ever release their semaphores, so stop the
+ * callbacks and return the semaphores to the pool. The callback has to be
+ * registered before the commit is applied rather than after, since NVKMS can
+ * wait for the flip's semaphore while applying a modeset.
+ */
+static void __nv_drm_put_in_fences(struct nv_drm_device *nv_dev,
+                                   nv_drm_atomic_state_base_t *state,
+                                   bool failed)
+{
+    struct drm_plane *plane;
+    struct drm_plane_state *plane_state;
+    int i;
+
+    for_each_new_plane_in_state(state, plane, plane_state, i) {
+        struct nv_drm_plane_state *nv_plane_state =
+            to_nv_drm_plane_state(plane_state);
+        struct nv_drm_plane_fence_cb_data *fence_data =
+            nv_plane_state->fence_data;
+
+        if (fence_data == NULL) {
+            continue;
+        }
+
+        nv_plane_state->fence_data = NULL;
+
+        if (failed) {
+            /*
+             * The callback runs with the fence's lock held, so if it can't be
+             * removed anymore, it has finished.
+             */
+            if (dma_fence_remove_callback(fence_data->fence,
+                                          &fence_data->dma_fence_cb)) {
+                dma_fence_put(fence_data->fence);
+                __nv_drm_plane_fence_cb_data_put(fence_data);
+            }
+            nvKms->cancelDisplaySemaphore(nv_dev->pDevice,
+                                          fence_data->semaphore_index);
+        }
+
+        dma_fence_put(fence_data->fence);
+        __nv_drm_plane_fence_cb_data_put(fence_data);
+    }
 }
 
 static int __nv_drm_convert_in_fences(
@@ -300,7 +358,12 @@ static int __nv_drm_convert_in_fences(
         }
 
         fence_data->nv_dev = nv_dev;
+        fence_data->fence = plane_state->fence;
         fence_data->semaphore_index = semaphore_index;
+        atomic_set(&fence_data->refcount, 2);
+
+        /* The callback drops its own reference on the fence */
+        dma_fence_get(plane_state->fence);
 
         ret = dma_fence_add_callback(plane_state->fence,
                                      &fence_data->dma_fence_cb,
@@ -318,16 +381,18 @@ static int __nv_drm_convert_in_fences(
 #endif
         case 0:
             /*
-             * The plane state's fence reference has either been consumed or
-             * belongs to the outstanding callback now.
+             * The plane state's fence reference belongs to fence_data now,
+             * see __nv_drm_put_in_fences().
              */
             plane_state->fence = NULL;
+            to_nv_drm_plane_state(plane_state)->fence_data = fence_data;
             break;
         default:
             NV_DRM_DEV_LOG_ERR(
                 nv_dev,
                 "Failed plane fence callback registration");
             /* Fence callback registration failed */
+            dma_fence_put(plane_state->fence);
             nvKms->cancelDisplaySemaphore(nv_dev->pDevice, semaphore_index);
             nv_drm_free(fence_data);
             return ret;
@@ -477,6 +542,8 @@ __nv_drm_cancel_flips(struct drm_device *dev,
     struct drm_crtc *crtc;
     struct drm_crtc_state *new_crtc_state;
     int i;
+
+    __nv_drm_put_in_fences(nv_dev, state, true /* failed */);
 
     for_each_new_crtc_in_state(state, crtc, new_crtc_state, i) {
         struct nv_drm_crtc *nv_crtc = to_nv_crtc(crtc);
@@ -689,6 +756,10 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
             __nv_drm_cancel_flips(dev, state, enqueued_flips);
         }
         return -EINVAL;
+    }
+
+    if (commit) {
+        __nv_drm_put_in_fences(nv_dev, state, false /* failed */);
     }
 
     if (num_submitted_flips > 0) {
