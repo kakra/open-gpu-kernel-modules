@@ -76,6 +76,8 @@ extern bool nv_drm_deadline_boost_module_param;
 extern bool nv_drm_scaling_mode_module_param;
 /* Set to true when VRR flip events report when the flip is scanned out. */
 extern bool nv_drm_vrr_flip_timestamps_module_param;
+/* Set to true when vblank counts and VRR flip times come from the raster position register. */
+extern bool nv_drm_hw_raster_module_param;
 
 void *nv_drm_calloc(size_t nmemb, size_t size);
 
