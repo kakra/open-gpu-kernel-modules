@@ -315,7 +315,9 @@ void nvKmsKapiCancelDisplaySemaphore(struct NvKmsKapiDevice *device,
                         &semParsed);
 
     if (semParsed.payload != NVKMS_KAPI_SEMAPHORE_VALUE_DONE) {
-        nvAssert(semParsed.payload == NVKMS_KAPI_SEMAPHORE_VALUE_NOT_READY);
+        /* READY if the fence signaled before the commit failed */
+        nvAssert(semParsed.payload == NVKMS_KAPI_SEMAPHORE_VALUE_NOT_READY ||
+                 semParsed.payload == NVKMS_KAPI_SEMAPHORE_VALUE_READY);
         ResetSemaphore(device, index, NVKMS_KAPI_SEMAPHORE_VALUE_DONE);
     }
 }
