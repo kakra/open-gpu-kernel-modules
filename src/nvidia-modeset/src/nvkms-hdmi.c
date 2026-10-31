@@ -2539,6 +2539,8 @@ NvBool nvHdmiFrlQueryConfigOneColorFormatAndBpc(
          * - pVidTransInfo->pTiming->HTotal
          * - pVidTransInfo->pTiming->HVisible
          * - pVidTransInfo->pTiming->VVisible
+         * - pVidTransInfo->pTiming->VTotal
+         * - pVidTransInfo->pTiming->interlaced
          *
          * This is also used, although we don't have a CEA format so we just
          * set it to 0:
@@ -2553,6 +2555,8 @@ NvBool nvHdmiFrlQueryConfigOneColorFormatAndBpc(
         nvtTiming.HTotal = pHwTimings->rasterSize.x;
         nvtTiming.VVisible = pHwTimings->rasterBlankStart.y -
                              pHwTimings->rasterBlankEnd.y;
+        nvtTiming.VTotal = pHwTimings->rasterSize.y;
+        nvtTiming.interlaced = pModeTimings->interlaced;
         nvtTiming.etc.status = 0;
 
         pNvtTiming = &nvtTiming;
