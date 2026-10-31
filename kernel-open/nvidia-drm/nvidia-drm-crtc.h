@@ -405,6 +405,8 @@ void nv_free_drm_lut_surface_pool(struct nv_drm_device *nv_dev);
 struct nv_drm_plane_state {
     struct drm_plane_state base;
     s32 __user *fd_user_ptr;
+    /* Only set while a commit applies this state */
+    struct nv_drm_plane_fence_cb_data *fence_data;
     enum nv_drm_input_color_space input_colorspace;
 #if defined(NV_DRM_HAS_HDR_OUTPUT_METADATA)
     struct drm_property_blob *hdr_output_metadata;
