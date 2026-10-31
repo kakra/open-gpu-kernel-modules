@@ -1349,13 +1349,17 @@ hdmiQueryFRLConfigC671(NVHDMIPKT_CLASS                         *pThis,
 
             if (pSinkCaps->pHdmiForumInfo->dsc_All_bpp)
             {
+                // A higher FRL rate only helps when it can raise the bpp. Keep bppMaxX16Itr: it holds the
+                // limit for this mode. Forced settings and precalculated timings must not change here.
                 if ((pClientCtrl->option == HDMI_QUERY_FRL_HIGHEST_PIXEL_QUALITY) &&
-                    (frlComputeResult.frlRate < (NvU32)dscMaxFRLRate))
+                    (frlComputeResult.frlRate < (NvU32)dscMaxFRLRate) &&
+                    !pClientCtrl->forceFRLRate &&
+                    (bppMinX16Itr != bppMaxX16Itr) &&
+                    (frlComputeResult.bppTargetx16 < bppMaxX16Itr))
                 {
                     // Increase FRL rate if possible and iterate over primary compressed format bppTarget to max Bpp
                     minFRLRateItr = getNextHigherLinkRate(frlComputeResult.frlRate);
                     bppMinX16Itr = frlComputeResult.bppTargetx16;
-                    bppMaxX16Itr = bppMaxX16;
                     bRedoDSCCalc = NV_TRUE;
                 }
 
