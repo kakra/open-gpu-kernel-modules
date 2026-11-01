@@ -2051,7 +2051,7 @@ static struct NvKmsKapiMemory*
 GetSystemMemoryHandleFromDmaBufSgtHelper(struct NvKmsKapiDevice *device,
                                          NvU32 descriptorType,
                                          NvP64 descriptor,
-                                         NvU32 limit)
+                                         NvU64 limit)
 {
     NvU32 ret;
     NV_OS_DESC_MEMORY_ALLOCATION_PARAMS memAllocParams = {0};
@@ -2113,7 +2113,7 @@ static struct NvKmsKapiMemory*
 GetSystemMemoryHandleFromSgt(struct NvKmsKapiDevice *device,
                              NvP64 sgt,
                              NvP64 gem,
-                             NvU32 limit)
+                             NvU64 limit)
 {
     NVOS32_DESCRIPTOR_TYPE_OS_SGT_PTR_PARAMETERS params = {
         .sgt = sgt,
@@ -2127,7 +2127,7 @@ GetSystemMemoryHandleFromSgt(struct NvKmsKapiDevice *device,
 static struct NvKmsKapiMemory*
 GetSystemMemoryHandleFromDmaBuf(struct NvKmsKapiDevice *device,
                                 NvP64 dmaBuf,
-                                NvU32 limit)
+                                NvU64 limit)
 {
     return GetSystemMemoryHandleFromDmaBufSgtHelper(
         device, NVOS32_DESCRIPTOR_TYPE_OS_DMA_BUF_PTR, dmaBuf, limit);
