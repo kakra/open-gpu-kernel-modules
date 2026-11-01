@@ -769,7 +769,7 @@ _createMemdescFromDmaBufSgtHelper
     NvU32    flags,
     void *pImportPriv,
     struct sg_table *pImportSgt,
-    NvU32 size,
+    NvU64 size,
     MEMORY_DESCRIPTOR **ppMemDesc,
     void **ppPrivate,
     MEM_DATA_RELEASE_CALL_BACK *pMemDataReleaseCallback
@@ -954,7 +954,7 @@ _createMemdescFromDmaBuf
     NvU32    flags,
     nv_dma_buf_t *pImportPriv,
     struct sg_table *pImportSgt,
-    NvU32 size,
+    NvU64 size,
     MEMORY_DESCRIPTOR **ppMemDesc,
     void **ppPrivate
 )
@@ -978,7 +978,7 @@ _createMemdescFromSgt
     NvU32    flags,
     struct drm_gem_object *pImportPrivGem,
     struct sg_table *pImportSgt,
-    NvU32 size,
+    NvU64 size,
     MEMORY_DESCRIPTOR **ppMemDesc,
     void **ppPrivate
 )
@@ -1028,7 +1028,7 @@ osCreateOsDescriptorFromFileHandle
     NV_STATUS rmStatus = NV_OK;
     nv_state_t *nv = NV_GET_NV_STATE(pGpu);
     nv_dma_device_t *dma_dev = NULL;
-    NvU32 size = 0;
+    NvU64 size = 0;
     nv_dma_buf_t *pImportPriv = NULL;
     struct sg_table *pImportSgt = NULL;
     NvBool bRoDeviceMap = NV_FALSE;
@@ -1116,7 +1116,7 @@ osCreateOsDescriptorFromDmaBufPtr
     NV_STATUS rmStatus = NV_OK;
     nv_state_t *nv = NV_GET_NV_STATE(pGpu);
     nv_dma_device_t *dma_dev = NULL;
-    NvU32 size = 0;
+    NvU64 size = 0;
     nv_dma_buf_t *pImportPriv = NULL;
     struct sg_table *pImportSgt = NULL;
     void *dmaBuf = (void*)((NvUPtr)pDescriptor);

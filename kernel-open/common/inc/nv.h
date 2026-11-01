@@ -1085,8 +1085,8 @@ struct drm_gem_object;
 
 NV_STATUS NV_API_CALL nv_dma_import_sgt  (nv_dma_device_t *, struct sg_table *, struct drm_gem_object *);
 void NV_API_CALL nv_dma_release_sgt(struct sg_table *, struct drm_gem_object *);
-NV_STATUS NV_API_CALL nv_dma_import_dma_buf      (nv_dma_device_t *, struct dma_buf *, NvBool, NvU32 *, struct sg_table **, nv_dma_buf_t **);
-NV_STATUS NV_API_CALL nv_dma_import_from_fd      (nv_dma_device_t *, NvS32, NvBool, NvU32 *, struct sg_table **, nv_dma_buf_t **);
+NV_STATUS NV_API_CALL nv_dma_import_dma_buf      (nv_dma_device_t *, struct dma_buf *, NvBool, NvU64 *, struct sg_table **, nv_dma_buf_t **);
+NV_STATUS NV_API_CALL nv_dma_import_from_fd      (nv_dma_device_t *, NvS32, NvBool, NvU64 *, struct sg_table **, nv_dma_buf_t **);
 void      NV_API_CALL nv_dma_release_dma_buf     (nv_dma_buf_t *);
 
 void      NV_API_CALL nv_schedule_uvm_isr        (nv_state_t *);

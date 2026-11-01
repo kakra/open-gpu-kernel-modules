@@ -1406,7 +1406,7 @@ struct NvKmsKapiFunctionsTable {
     (*getSystemMemoryHandleFromSgt)(struct NvKmsKapiDevice *device,
                                     NvP64 sgt,
                                     NvP64 gem,
-                                    NvU32 limit);
+                                    NvU64 limit);
 
     /*
      * Import dma-buf in the memory handle.
@@ -1422,7 +1422,7 @@ struct NvKmsKapiFunctionsTable {
     struct NvKmsKapiMemory*
     (*getSystemMemoryHandleFromDmaBuf)(struct NvKmsKapiDevice *device,
                                        NvP64 dmaBuf,
-                                       NvU32 limit);
+                                       NvU64 limit);
 
     /*!
      * Import a semaphore surface allocated elsewhere to NVKMS and return a
