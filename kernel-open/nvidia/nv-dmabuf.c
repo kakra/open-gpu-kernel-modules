@@ -1915,7 +1915,7 @@ NV_STATUS NV_API_CALL nv_dma_import_dma_buf
     nv_dma_device_t *dma_dev,
     struct dma_buf *dma_buf,
     NvBool is_ro_device_map,
-    NvU32 *size,
+    NvU64 *size,
     struct sg_table **sgt,
     nv_dma_buf_t **import_priv
 )
@@ -2002,7 +2002,7 @@ NV_STATUS NV_API_CALL nv_dma_import_from_fd
     nv_dma_device_t *dma_dev,
     NvS32 fd,
     NvBool is_ro_device_map,
-    NvU32 *size,
+    NvU64 *size,
     struct sg_table **sgt,
     nv_dma_buf_t **import_priv
 )
