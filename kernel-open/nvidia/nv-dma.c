@@ -180,7 +180,7 @@ NV_STATUS nv_create_dma_map_scatterlist(nv_dma_map_t *dma_map)
 
     if (dma_map->import_sgt && (num_submaps != 1))
     {
-        return -EINVAL;
+        return NV_ERR_NOT_SUPPORTED;
     }
 
     dma_map->mapping.discontig.submap_count = NvU64_LO32(num_submaps);
@@ -324,7 +324,8 @@ void nv_destroy_dma_map_scatterlist(nv_dma_map_t *dma_map)
     os_free_mem(dma_map->mapping.discontig.submaps);
 }
 
-static void nv_load_dma_map_scatterlist(
+/* Returns the number of pages loaded, at most dma_map->page_count. */
+static NvU64 nv_load_dma_map_scatterlist(
     nv_dma_map_t *dma_map,
     NvU64 *va_array
 )
@@ -344,13 +345,16 @@ static void nv_load_dma_map_scatterlist(
              */
             for (sg_addr = sg_dma_address(sg), sg_len = sg_dma_len(sg),
                     sg_off = 0, k = 0;
-                 (sg_off < sg_len) && (k < submap->page_count);
+                 (sg_off < sg_len) && (k < submap->page_count) &&
+                     (l < dma_map->page_count);
                  sg_off += PAGE_SIZE, l++, k++)
             {
                 va_array[l] = sg_addr + sg_off;
             }
         }
     }
+
+    return l;
 }
 
 static NV_STATUS nv_dma_map_scatterlist(
@@ -379,7 +383,15 @@ static NV_STATUS nv_dma_map_scatterlist(
         return status;
     }
 
-    nv_load_dma_map_scatterlist(dma_map, va_array);
+    i = nv_load_dma_map_scatterlist(dma_map, va_array);
+    if (i != dma_map->page_count)
+    {
+        NV_DMA_DEV_PRINTF(NV_DBG_ERRORS, dma_dev,
+                "DMA mapping covers %llu pages, expected %llu\n",
+                i, dma_map->page_count);
+        nv_dma_unmap_scatterlist(dma_map);
+        return NV_ERR_INVALID_STATE;
+    }
 
     for (i = 0; i < dma_map->page_count; i++)
     {
