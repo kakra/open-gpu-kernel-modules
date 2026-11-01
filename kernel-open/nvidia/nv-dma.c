@@ -613,6 +613,38 @@ static NV_STATUS NV_API_CALL nv_dma_unmap_pages(
     return NV_OK;
 }
 
+static NvBool nv_dma_dev_is_direct_mapped(struct device *dev)
+{
+    struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
+
+    return (domain == NULL) || (domain->type == IOMMU_DOMAIN_IDENTITY);
+}
+
+/*
+ * An imported SGT holds DMA addresses for the device it was mapped for. They
+ * are only valid for another GPU if both see the same address space.
+ */
+static NvBool nv_dma_sgt_usable_by_device(
+    struct device *sgt_dev,
+    struct device *dev
+)
+{
+    /* A SoC display's NISO device is the same GPU as its parent device. */
+    if ((sgt_dev == dev) || !dev_is_pci(sgt_dev) || !dev_is_pci(dev))
+    {
+        return NV_TRUE;
+    }
+
+    if ((sgt_dev->iommu_group != NULL) &&
+        (sgt_dev->iommu_group == dev->iommu_group))
+    {
+        return NV_TRUE;
+    }
+
+    return nv_dma_dev_is_direct_mapped(sgt_dev) &&
+           nv_dma_dev_is_direct_mapped(dev);
+}
+
 /*
  * Wrappers used for DMA-remapping an nv_alloc_t during transition to more
  * generic interfaces.
@@ -637,6 +669,14 @@ NV_STATUS NV_API_CALL nv_dma_map_alloc
     /* If we have an imported SGT, just use that directly. */
     if (at && at->import_sgt)
     {
+        if (!nv_dma_sgt_usable_by_device(at->dev, dma_dev->dev))
+        {
+            NV_DMA_DEV_PRINTF(NV_DBG_ERRORS, dma_dev,
+                    "Imported buffer was mapped for %s and can't be shared "
+                    "through the IOMMU\n", dev_name(at->dev));
+            return NV_ERR_NOT_SUPPORTED;
+        }
+
         *priv = at->import_sgt;
         status = nv_dma_map_sgt(dma_dev, page_count, va_array, at->cache_type,
                                 bReadOnlyDeviceMap, priv);
