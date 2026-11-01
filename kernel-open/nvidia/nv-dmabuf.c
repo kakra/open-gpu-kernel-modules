@@ -1031,8 +1031,7 @@ nv_dma_buf_attach(
     }
 
 #if defined(NV_DMA_BUF_ATTACHMENT_HAS_PEER2PEER)
-    if ((attachment->importer_ops != NULL) &&
-        (!attachment->peer2peer) &&
+    if ((!attachment->peer2peer) &&
         (!priv->map_attrs.mem_has_struct_page))
     {
         nv_printf(NV_DBG_ERRORS,
