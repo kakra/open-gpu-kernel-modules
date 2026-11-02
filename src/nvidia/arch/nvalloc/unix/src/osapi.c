@@ -3439,6 +3439,12 @@ NvBool NV_API_CALL rm_is_supported_pci_device(
 //
 #define RM_DP_AUX_I2C_MAX_DEFERS   16
 #define RM_DP_AUX_I2C_MAX_TIMEOUTS 3
+//
+// The limits above restart with every AUX transaction of a message. Also limit
+// the delays of the whole message, so a sink that defers every transaction of
+// a long message can't hold the locks for hundreds of milliseconds.
+//
+#define RM_DP_AUX_I2C_MAX_DELAYS   64
 
 /*
  * Performs an I2C transfer over the DP AUX channel, split into AUX transactions.
@@ -3464,6 +3470,7 @@ static NV_STATUS RmDpAuxI2CTransferChunked
     NvU32      done     = 0;
     NvU32      defers   = 0;
     NvU32      timeouts = 0;
+    NvU32      delays   = 0;
 
     pParams = portMemAllocNonPaged(sizeof(*pParams));
     if (pParams == NULL)
@@ -3510,7 +3517,8 @@ static NV_STATUS RmDpAuxI2CTransferChunked
 
         if (status == NV_ERR_TIMEOUT)
         {
-            if (++timeouts >= RM_DP_AUX_I2C_MAX_TIMEOUTS)
+            if ((++timeouts >= RM_DP_AUX_I2C_MAX_TIMEOUTS) ||
+                (++delays > RM_DP_AUX_I2C_MAX_DELAYS))
             {
                 break;
             }
@@ -3556,7 +3564,8 @@ static NV_STATUS RmDpAuxI2CTransferChunked
 
         if (bDefer)
         {
-            if (++defers > RM_DP_AUX_I2C_MAX_DEFERS)
+            if ((++defers > RM_DP_AUX_I2C_MAX_DEFERS) ||
+                (++delays > RM_DP_AUX_I2C_MAX_DELAYS))
             {
                 status = NV_ERR_TIMEOUT;
                 break;
