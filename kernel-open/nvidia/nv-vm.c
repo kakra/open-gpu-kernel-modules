@@ -527,7 +527,7 @@ static void nv_mem_pool_shrinker_register(nv_page_pool_t *mem_pool, struct shrin
 // with NR_KERNEL_MISC_RECLAIMABLE lets si_mem_available() include them in
 // MemAvailable (/proc/meminfo), giving the kernel an accurate picture of how
 // much memory can be recovered under pressure via the registered shrinker.
-static void nv_mem_pool_mod_misc_reclaimable(nv_page_pool_t *mem_pool, long delta_compound_pages)
+static void nv_mem_pool_mod_node_reclaimable(nv_page_pool_t *mem_pool, long delta_compound_pages)
 {
 #if defined(NV_NR_KERNEL_MISC_RECLAIMABLE_PRESENT)
     if (delta_compound_pages != 0)
@@ -535,6 +535,11 @@ static void nv_mem_pool_mod_misc_reclaimable(nv_page_pool_t *mem_pool, long delt
                             NR_KERNEL_MISC_RECLAIMABLE,
                             delta_compound_pages << mem_pool->order);
 #endif
+}
+
+static void nv_mem_pool_mod_misc_reclaimable(nv_page_pool_t *mem_pool, long delta_compound_pages)
+{
+    nv_mem_pool_mod_node_reclaimable(mem_pool, delta_compound_pages);
     if (mem_pool->uncached)
         atomic_long_add(delta_compound_pages << mem_pool->order, &nv_uncached_pool_pages);
 }
@@ -1122,9 +1127,13 @@ nv_mem_pool_free_uncached_pages
     unsigned int i;
     NV_STATUS status;
 
-    if (!NV_MAY_SLEEP() ||
-        atomic_long_read(&nv_uncached_pool_pages) + at->num_pages > max_os_pages)
+    if (!NV_MAY_SLEEP())
+        return NV_ERR_NO_MEMORY;
+
+    // Reserve the room first, so parallel frees can't overshoot the limit together
+    if (atomic_long_add_return(at->num_pages, &nv_uncached_pool_pages) > max_os_pages)
     {
+        atomic_long_sub(at->num_pages, &nv_uncached_pool_pages);
         return NV_ERR_NO_MEMORY;
     }
 
@@ -1156,7 +1165,8 @@ nv_mem_pool_free_uncached_pages
     mem_pool->pages_owned += num_pages;
     os_release_mutex(mem_pool->lock);
 
-    nv_mem_pool_mod_misc_reclaimable(mem_pool, (long)num_pages);
+    // The pool counter already holds the reservation
+    nv_mem_pool_mod_node_reclaimable(mem_pool, (long)num_pages);
 
     if (queue_worker)
     {
@@ -1171,6 +1181,8 @@ failed:
         list_del(&pool_entry->list_node);
         NV_KFREE(pool_entry, sizeof(*pool_entry));
     }
+
+    atomic_long_sub(at->num_pages, &nv_uncached_pool_pages);
 
     return NV_ERR_NO_MEMORY;
 }
