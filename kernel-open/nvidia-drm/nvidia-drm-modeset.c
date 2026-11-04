@@ -660,14 +660,22 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
                  * later; leave their submit time unset so their events are
                  * reported at the vblank they arrive at. So do flips with
                  * VRR enabled that NVKMS hasn't reported VRR active for yet.
+                 * With VRR active, a tearing flip's time comes from the
+                 * raster position instead, see
+                 * __nv_drm_crtc_tearing_flip_time().
                  */
                 nv_new_crtc_state->nv_flip->submit_time = 0;
                 nv_new_crtc_state->nv_flip->raster_frame_valid = false;
+                nv_new_crtc_state->nv_flip->raster_active_end = 0;
+                nv_new_crtc_state->nv_flip->tearing_found = false;
                 nv_new_crtc_state->nv_flip->vrr =
                     nv_drm_vrr_flip_timestamps_module_param &&
-                    nv_crtc->vrr_active &&
-                    !__nv_drm_crtc_state_async_flip(new_crtc_state);
-                if (!__nv_drm_crtc_state_async_flip(new_crtc_state) &&
+                    nv_crtc->vrr_active;
+                nv_new_crtc_state->nv_flip->tearing =
+                    nv_new_crtc_state->nv_flip->vrr &&
+                    __nv_drm_crtc_state_async_flip(new_crtc_state);
+                if ((!__nv_drm_crtc_state_async_flip(new_crtc_state) ||
+                     nv_new_crtc_state->nv_flip->tearing) &&
                     (nv_new_crtc_state->nv_flip->vrr ||
                      !__nv_drm_crtc_state_vrr_enabled(new_crtc_state)) &&
                     !__nv_drm_crtc_has_unsignaled_in_fence(state, crtc) &&

@@ -3523,7 +3523,8 @@ failed:
  *
  * Flips that may happen later than that are left without a submit time and
  * reported at the current vblank like before: tearing flips and flips waiting
- * on an unsignaled acquire fence.
+ * on an unsignaled acquire fence. With VRR active, tearing flips are reported
+ * from the raster position instead, see __nv_drm_crtc_tearing_flip_time().
  *
  * With VRR, the raster stops at the end of the front porch after each scanout
  * and waits for a flip. A vblank timestamp assumes a blanking interval of the
@@ -3729,6 +3730,106 @@ __nv_drm_crtc_raster_flip_time(struct nv_drm_crtc *nv_crtc,
 }
 
 /*
+ * Find when a tearing flip with VRR active is on screen. It happens as soon as
+ * the hardware gets it and its event follows within about the time a raster
+ * restart's does. If it arrives during a scanout it tears into it, and is
+ * reported at the vblank that started that scanout, like tearing flips at a
+ * fixed refresh rate; the vblank timestamps can't be used for that, they are
+ * early by however long the raster waited before the scanout. If it arrives
+ * while the raster waits, it restarts the raster like other VRR flips.
+ *
+ * NVKMS turns some tearing flips into ones that wait for the end of the
+ * scanout (the first after a non-tearing flip, or one changing the format or
+ * size); their events arrive at that end, so a flip whose event took longer
+ * than a raster restart's isn't taken to have torn into the scanout it was
+ * submitted in, and the raster position when the event is handled decides.
+ *
+ * If the raster can't be used, the flip is reported at the latest vblank like
+ * before. Always finds a time; the result is kept, since the raster moves on
+ * while the event waits for earlier ones. Called with dev->event_lock and
+ * dev->vblank_time_lock held.
+ */
+static void __nv_drm_crtc_tearing_flip_time(struct nv_drm_crtc *nv_crtc,
+                                            struct nv_drm_flip *nv_flip,
+                                            u64 *count, NvU64 *time)
+{
+    NvU64 kick_time = READ_ONCE(nv_flip->kick_time);
+    u32 frame, line, flip_frame;
+    NvU64 now;
+
+    if (nv_flip->tearing_found) {
+        goto found;
+    }
+
+    /* The event can be handled before applyModeSetConfig() returns */
+    if (kick_time == 0 || kick_time > nv_flip->event_time) {
+        kick_time = nv_flip->event_time;
+    }
+
+    if (!__nv_drm_crtc_raster_read(nv_crtc, &frame, &line) ||
+        !nv_crtc->raster_synced) {
+        if (nv_crtc->vblank_history_len > 0) {
+            const unsigned int last =
+                (nv_crtc->vblank_history_next + NV_DRM_VBLANK_HISTORY - 1) %
+                NV_DRM_VBLANK_HISTORY;
+
+            nv_flip->tearing_count = nv_crtc->vblank_history[last].count;
+            nv_flip->tearing_time = nv_crtc->vblank_history[last].time;
+        } else {
+            nv_flip->tearing_count = drm_crtc_vblank_count(&nv_crtc->base);
+            nv_flip->tearing_time = ktime_get_ns();
+        }
+        nv_flip->tearing_found = true;
+        goto found;
+    }
+    now = ktime_get_ns();
+
+    if (nv_flip->raster_frame_valid &&
+        nv_flip->raster_active_end != 0 &&
+        kick_time < nv_flip->raster_active_end &&
+        nv_flip->event_time - kick_time <= NV_DRM_VRR_FLIP_RESTART_EVENT_NS) {
+        /* The hardware had it during the scanout it was submitted in */
+        flip_frame = nv_flip->raster_frame;
+        nv_flip->tearing_time = nv_flip->raster_first_active;
+    } else if (line < nv_crtc->raster_blank_start) {
+        /* It tore into this scanout, or restarted the raster for it */
+        flip_frame = frame;
+        nv_flip->tearing_time =
+            __nv_drm_crtc_raster_first_active(nv_crtc, line, now);
+    } else if (line < nv_crtc->raster_height) {
+        /* In the front porch: the raster goes on to the next frame for it */
+        flip_frame = frame + 1;
+        nv_flip->tearing_time =
+            __nv_drm_crtc_raster_first_active(nv_crtc, line, now);
+    } else {
+        /*
+         * The raster waits, so the flip didn't restart it: it tore into the
+         * scanout that just ended, and this handler is late.
+         */
+        flip_frame = frame;
+        if (nv_flip->raster_frame_valid &&
+            nv_flip->raster_active_end != 0 &&
+            nv_flip->raster_frame == frame) {
+            nv_flip->tearing_time = nv_flip->raster_first_active;
+        } else {
+            nv_flip->tearing_time =
+                now - (nv_crtc->raster_blank_start -
+                       nv_crtc->raster_first_active) * nv_crtc->raster_line_ns;
+        }
+    }
+
+    /* raster_last is what DRM core's count currently corresponds to */
+    nv_flip->tearing_count =
+        drm_crtc_vblank_count(&nv_crtc->base) +
+        (s16)(flip_frame - nv_crtc->raster_base - nv_crtc->raster_last);
+    nv_flip->tearing_found = true;
+
+found:
+    *count = nv_flip->tearing_count;
+    *time = nv_flip->tearing_time;
+}
+
+/*
  * Send the events of pending flips whose vblank has been handled, or of all
  * pending flips if 'all' (using the latest vblank, or the current time if
  * none). Called with dev->event_lock held.
@@ -3748,7 +3849,10 @@ static void __nv_drm_crtc_process_pending_flip_events(struct nv_drm_crtc *nv_crt
         enum nv_drm_raster_flip raster = NV_DRM_RASTER_FLIP_UNKNOWN;
 
         spin_lock_irqsave(&dev->vblank_time_lock, irqflags);
-        if (nv_flip->vrr) {
+        if (nv_flip->tearing) {
+            __nv_drm_crtc_tearing_flip_time(nv_crtc, nv_flip, &count, &time);
+            raster = NV_DRM_RASTER_FLIP_FOUND;
+        } else if (nv_flip->vrr) {
             raster = __nv_drm_crtc_raster_flip_time(nv_crtc, nv_flip,
                                                     &count, &time);
         }
@@ -3792,10 +3896,15 @@ static void __nv_drm_crtc_process_pending_flip_events(struct nv_drm_crtc *nv_crt
  * dev->vblank_time_lock held.
  */
 static bool __nv_drm_crtc_find_vrr_flip_time(struct nv_drm_crtc *nv_crtc,
-                                             const struct nv_drm_flip *nv_flip,
+                                             struct nv_drm_flip *nv_flip,
                                              u64 *count, NvU64 *time)
 {
     NvU64 kick_time = READ_ONCE(nv_flip->kick_time);
+
+    if (nv_flip->tearing) {
+        __nv_drm_crtc_tearing_flip_time(nv_crtc, nv_flip, count, time);
+        return true;
+    }
 
     switch (__nv_drm_crtc_raster_flip_time(nv_crtc, nv_flip, count, time)) {
     case NV_DRM_RASTER_FLIP_FOUND:
@@ -4112,6 +4221,17 @@ void nv_drm_crtc_set_flip_raster_frame(struct nv_drm_crtc *nv_crtc,
     nv_flip->raster_frame_valid =
         __nv_drm_crtc_raster_read(nv_crtc, &frame, &line);
     nv_flip->raster_frame = frame;
+    nv_flip->raster_active_end = 0;
+    if (nv_flip->tearing && nv_flip->raster_frame_valid &&
+        line < nv_crtc->raster_blank_start) {
+        const NvU64 now = ktime_get_ns();
+
+        nv_flip->raster_first_active =
+            __nv_drm_crtc_raster_first_active(nv_crtc, line, now);
+        nv_flip->raster_active_end =
+            now + (nv_crtc->raster_blank_start - line) *
+                  nv_crtc->raster_line_ns;
+    }
     spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
 }
 

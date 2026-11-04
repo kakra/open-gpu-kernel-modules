@@ -240,7 +240,8 @@ struct nv_drm_flip {
      * CLOCK_MONOTONIC time (ns) just before the flip was handed to NVKMS. The
      * flip happens at the first vblank starting after NVKMS kicked it off to
      * the hardware, which is after this. Zero if the flip may happen later
-     * (tearing flips, unsignaled acquire fences).
+     * (tearing flips, unsignaled acquire fences); tearing flips with VRR
+     * active have it set too, see @tearing.
      */
     NvU64 submit_time;
 
@@ -271,6 +272,16 @@ struct nv_drm_flip {
     bool vrr;
 
     /*
+     * @tearing:
+     *
+     * A tearing (async) flip with @vrr set. It happens as soon as the hardware
+     * gets it: during a scanout it tears into that scanout, while the raster
+     * waits it restarts the raster like other VRR flips. Its time comes from
+     * the raster position only, see __nv_drm_crtc_tearing_flip_time().
+     */
+    bool tearing;
+
+    /*
      * @raster_frame, @raster_frame_valid:
      *
      * The hardware frame count just before the flip was handed to NVKMS, if
@@ -278,6 +289,28 @@ struct nv_drm_flip {
      */
     u32 raster_frame;
     bool raster_frame_valid;
+
+    /*
+     * @raster_first_active, @raster_active_end:
+     *
+     * For @tearing flips, when the first active line of @raster_frame was
+     * scanned out and when its scanout ends, if the flip was handed to NVKMS
+     * before the end of that frame's scanout; @raster_active_end is zero
+     * otherwise. Protected by &drm_device.vblank_time_lock.
+     */
+    NvU64 raster_first_active;
+    NvU64 raster_active_end;
+
+    /*
+     * @tearing_found, @tearing_count, @tearing_time:
+     *
+     * The vblank a @tearing flip was found to belong to when its event was
+     * handled, kept for when its event has to wait for earlier flips: by then
+     * the raster has moved on. Protected by &drm_device.vblank_time_lock.
+     */
+    bool tearing_found;
+    u64 tearing_count;
+    NvU64 tearing_time;
 };
 
 struct nv_drm_crtc_state {
