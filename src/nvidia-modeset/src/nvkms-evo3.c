@@ -3913,6 +3913,15 @@ EvoFlipC3Common(NVDevEvoPtr pDevEvo,
         DRF_NUM(C37E, _SET_SIZE_OUT, _WIDTH, pHwState->sizeOut.width) |
         DRF_NUM(C37E, _SET_SIZE_OUT, _HEIGHT, pHwState->sizeOut.height));
 
+    /* Source fetch offset, the same for both eyes. */
+    ct_assert(NVC37E_SET_POINT_IN(1) == NVC37E_SET_POINT_IN(0) + 4);
+    nvDmaSetStartEvoMethod(pChannel, NVC37E_SET_POINT_IN(0), 2);
+    for (eye = 0; eye < NVKMS_MAX_EYES; eye++) {
+        nvDmaSetEvoMethodData(pChannel,
+            DRF_NUM(C37E, _SET_POINT_IN, _X, pHwState->pointIn.x) |
+            DRF_NUM(C37E, _SET_POINT_IN, _Y, pHwState->pointIn.y));
+    }
+
     /* XXX nvdisplay: enforce pitch/BL layout are consistent between eyes at a
      * higher level */
 

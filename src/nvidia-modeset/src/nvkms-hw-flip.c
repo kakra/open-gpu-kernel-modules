@@ -1340,11 +1340,52 @@ NvBool nvUpdateFlipEvoHwState(
 {
     NvU32 layer;
 
-    if (pParams->viewPortIn.specified) {
+    if (pParams->viewPortIn.specified &&
+        nvViewPortInIsMainLayerPointIn(pOpenDev)) {
+        NVFlipChannelEvoHwState *pMainHwState =
+            &pFlipState->layer[NVKMS_MAIN_LAYER];
+
+        /*
+         * Only take a new source point together with a new main layer
+         * surface: without one, the window would either not be reprogrammed
+         * or be reflipped with its current sync objects. nvidia-drm sends the
+         * surface with every plane update, so this only rejects requests it
+         * doesn't make.
+         */
+        if (((pMainHwState->pointIn.x != pParams->viewPortIn.point.x) ||
+             (pMainHwState->pointIn.y != pParams->viewPortIn.point.y)) &&
+            !pParams->layer[NVKMS_MAIN_LAYER].surface.specified) {
+            return FALSE;
+        }
+
+        pMainHwState->pointIn = pParams->viewPortIn.point;
+
+        /* Keep the head viewport where the modeset put it. */
         pFlipState->dirty.viewPortPointIn = TRUE;
-        pFlipState->viewPortPointIn.x = pParams->viewPortIn.point.x +
-            (pTimings->viewPort.in.width * mergeHeadSection);
-        pFlipState->viewPortPointIn.y = pParams->viewPortIn.point.y;
+        pFlipState->viewPortPointIn.x =
+            pTimings->viewPort.in.width * mergeHeadSection;
+        pFlipState->viewPortPointIn.y = 0;
+    } else {
+        /*
+         * Other clients have no source point; don't let a surface they flip
+         * to inherit the one nvidia-drm left in the main layer state (e.g.
+         * console restore, or a DRM lease client flipping through userspace
+         * NVKMS). Only on a new surface: NVKMS's own flips that keep the
+         * current surface, like flipping the semaphores to NULL when a
+         * semaphore surface is unregistered, must keep its source point.
+         */
+        if (!nvViewPortInIsMainLayerPointIn(pOpenDev) &&
+            pParams->layer[NVKMS_MAIN_LAYER].surface.specified) {
+            pFlipState->layer[NVKMS_MAIN_LAYER].pointIn.x = 0;
+            pFlipState->layer[NVKMS_MAIN_LAYER].pointIn.y = 0;
+        }
+
+        if (pParams->viewPortIn.specified) {
+            pFlipState->dirty.viewPortPointIn = TRUE;
+            pFlipState->viewPortPointIn.x = pParams->viewPortIn.point.x +
+                (pTimings->viewPort.in.width * mergeHeadSection);
+            pFlipState->viewPortPointIn.y = pParams->viewPortIn.point.y;
+        }
     }
 
     if (!UpdateCursorLayerFlipEvoHwState(pOpenDev, pDevEvo, pParams, pTimings,
@@ -1668,10 +1709,8 @@ ValidateMainFlipChannelEvoHwState(const NVDevEvoRec *pDevEvo,
 
     /*
      * This struct represents the source fetch rectangle for a given surface,
-     * and will be populated later as such. This function doesn't explicitly set
-     * sourceFetchRect.{x,y} because NVKMS currently doesn't support programming
-     * source fetch offsets, so the init value of 0 should be fine for both of
-     * these fields.
+     * and will be populated later as such. Only the main layer has a source
+     * fetch offset (pointIn); see nvViewPortInIsMainLayerPointIn().
      */
     struct NvKmsRect sourceFetchRect = {0};
 
@@ -1695,6 +1734,8 @@ ValidateMainFlipChannelEvoHwState(const NVDevEvoRec *pDevEvo,
             return FALSE;
         }
 
+        sourceFetchRect.x = pHwState->pointIn.x;
+        sourceFetchRect.y = pHwState->pointIn.y;
         sourceFetchRect.width = pHwState->sizeIn.width;
         sourceFetchRect.height = pHwState->sizeIn.height;
 
@@ -1710,6 +1751,28 @@ ValidateMainFlipChannelEvoHwState(const NVDevEvoRec *pDevEvo,
          * guaranteed that. */
         nvAssert(pDevEvo->caps.maxWidthInPixels <= NV_U16_MAX);
         nvAssert(pDevEvo->caps.maxHeight <= NV_U16_MAX);
+
+        /*
+         * An offset fetch must stay inside the surface. Without an offset,
+         * keep accepting what NVKMS always accepted.
+         *
+         * Also refuse an offset with a rotated or reflected scan: whether
+         * SET_POINT_IN is taken in surface space or in the reversed scan
+         * direction is unverified, and a wrong guess would show the wrong
+         * part of the surface. The client then composites instead.
+         */
+        if (((pHwState->pointIn.x != 0) || (pHwState->pointIn.y != 0)) &&
+            (A_plus_B_greater_than_C_U16(pHwState->pointIn.x,
+                                         pHwState->sizeIn.width,
+                                         pSurfaceEvo->widthInPixels) ||
+             A_plus_B_greater_than_C_U16(pHwState->pointIn.y,
+                                         pHwState->sizeIn.height,
+                                         pSurfaceEvo->heightInPixels) ||
+             (pHwState->rrParams.rotation != NVKMS_ROTATION_0) ||
+             pHwState->rrParams.reflectionX ||
+             pHwState->rrParams.reflectionY)) {
+            return FALSE;
+        }
     }
 
     return TRUE;
