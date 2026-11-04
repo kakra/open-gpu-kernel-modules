@@ -631,6 +631,12 @@ typedef struct {
     NvBool vrrTearing;
     NvBool perEyeStereoFlip;
 
+    /*
+     * Source fetch offset into the surface (window SET_POINT_IN). Only set
+     * for the main layer of nvidia-drm flips; see
+     * nvViewPortInIsMainLayerPointIn().
+     */
+    struct NvKmsPoint pointIn;
     struct NvKmsSize sizeIn;
     struct NvKmsSize sizeOut;
     struct NvKmsSignedPoint outputPosition;

@@ -174,6 +174,11 @@ struct NvKmsPerOpenDev {
     NVEvoApiHandlesRec           vblankSemControlHandles;
     NVEvoApiHandlesRec           vblankIntrCallbackHandles[NVKMS_MAX_HEADS_PER_DISP];
     NvBool                       beingFreed;
+    /*
+     * The open belongs to KAPI (nvidia-drm), which passes the main layer's
+     * source x/y in viewPortIn.point; see nvViewPortInIsMainLayerPointIn().
+     */
+    NvBool                       viewPortInIsMainLayerPointIn;
 };
 
 struct NvKmsPerOpenEventListEntry {
@@ -1123,6 +1128,15 @@ struct NvKmsPerOpenDev *nvAllocPerOpenDev(struct NvKmsPerOpen *pOpen,
     }
 
     pOpenDev->pDevEvo = pDevEvo;
+
+    /*
+     * Only KAPI opens are kernel-space clients with a kernel per-open handle;
+     * NVKMS's own internal open (console restore etc.) has none and keeps the
+     * viewport panning meaning of viewPortIn.point.
+     */
+    pOpenDev->viewPortInIsMainLayerPointIn =
+        (pOpen->clientType == NVKMS_CLIENT_KERNEL_SPACE) &&
+        (pOpen->pOpenKernel != NULL);
 
     if (!nvEvoInitApiHandles(&pOpenDev->dispHandles,
                              ARRAY_LEN(pOpenDev->disp))) {
@@ -6974,6 +6988,22 @@ const NVEvoApiHandlesRec *nvGetSurfaceHandlesFromOpenDevConst(
     }
 
     return &pOpenDev->surfaceHandles;
+}
+
+/*
+ * NVKMS can't take a per-layer source fetch offset through the flip API
+ * without changing its userspace ABI, so KAPI has always passed the DRM
+ * primary plane's SRC_X/SRC_Y as viewPortIn.point. Panning the head viewport
+ * by it only shows the right content when the plane is unscaled, at CRTC
+ * 0,0, and fetched from 0,0 up to the end of the source rectangle; otherwise
+ * the screen shows black or the wrong part of the surface, and overlays move
+ * with the pan. For KAPI opens, use the point as the main layer's
+ * SET_POINT_IN instead and leave the head viewport at its origin.
+ */
+NvBool nvViewPortInIsMainLayerPointIn(
+    const struct NvKmsPerOpenDev *pOpenDev)
+{
+    return (pOpenDev != NULL) && pOpenDev->viewPortInIsMainLayerPointIn;
 }
 
 static int suspendCounter = 0;

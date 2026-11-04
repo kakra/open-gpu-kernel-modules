@@ -74,6 +74,9 @@ NVEvoApiHandlesRec *nvGetSurfaceHandlesFromOpenDev(
 const NVEvoApiHandlesRec *nvGetSurfaceHandlesFromOpenDevConst(
     const struct NvKmsPerOpenDev *pOpenDev);
 
+NvBool nvViewPortInIsMainLayerPointIn(
+    const struct NvKmsPerOpenDev *pOpenDev);
+
 void nvKmsServiceNonStallInterrupt(void *dataPtr, NvU32 dataU32);
 
 #ifdef __cplusplus
