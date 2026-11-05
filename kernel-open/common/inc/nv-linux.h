@@ -170,6 +170,23 @@
 #include <linux/memory.h>
 
 #include <linux/workqueue.h>        /* workqueue                        */
+
+/*
+ * system_wq and system_unbound_wq are deprecated in favour of
+ * system_percpu_wq and system_dfl_wq where those exist.
+ */
+#if NV_IS_EXPORT_SYMBOL_PRESENT_system_percpu_wq
+#define nv_percpu_wq system_percpu_wq
+#else
+#define nv_percpu_wq system_wq
+#endif
+
+#if NV_IS_EXPORT_SYMBOL_PRESENT_system_dfl_wq
+#define nv_dfl_wq system_dfl_wq
+#else
+#define nv_dfl_wq system_unbound_wq
+#endif
+
 #include <linux/llist.h>            /* llist                            */
 #include "nv-kthread-q.h"           /* kthread based queue              */
 #include <linux/efi.h>              /* efi_enabled                      */
