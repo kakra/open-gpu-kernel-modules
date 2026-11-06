@@ -3139,7 +3139,18 @@ TryToDoPostFlipIMP(void *dataPtr, NvU32 dataU32)
         }
 
         if (update) {
-            nvDoIMPUpdateEvo(pDispEvo, &updateState);
+            /*
+             * Don't wait for the update to complete: with an IMP change that
+             * takes a display supervisor round trip through RM, 10-15 ms,
+             * all of it under nvkms_lock, which stalls every client's flips.
+             * Lowering only happens on channels without pending methods,
+             * and a flip that needs the higher usage bounds or the
+             * watermark disabled again goes through PreFlipIMP(), whose
+             * synchronous core channel update completes after this one, so
+             * no flip can run against bounds it exceeds.
+             */
+            nvEvoUpdateAndKickOff(pDispEvo, FALSE /* sync */, &updateState,
+                                  TRUE /* releaseElv */);
         }
     }
 }
