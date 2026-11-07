@@ -718,7 +718,17 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
     allocParams.type = (p->flags & NV_GEM_ALLOC_NO_SCANOUT) ?
         NVKMS_KAPI_ALLOCATION_TYPE_OFFSCREEN : NVKMS_KAPI_ALLOCATION_TYPE_SCANOUT;
     allocParams.size = p->memory_size;
-    allocParams.useVideoMemory = nv_dev->hasVideoMemory;
+    /*
+     * Pitch-layout offscreen memory (GBM_BO_USE_LINEAR without SCANOUT) is
+     * what userspace allocates to share with other devices: an iGPU
+     * rendering or displaying it, a USB or BMC display. Importers need its
+     * pages (prime_get_sg_table), which video memory doesn't have, so put
+     * it in system memory from the start. NVIDIA's GL can't render to
+     * pitch-linear images anyway, so same-GPU use is limited to sampling
+     * and uploads. Block-linear and scanout memory stays in video memory.
+     */
+    allocParams.useVideoMemory = nv_dev->hasVideoMemory &&
+        (p->block_linear || !(p->flags & NV_GEM_ALLOC_NO_SCANOUT));
     allocParams.compressible = &p->compressible;
 
     pMemory = nvKms->allocateMemory(nv_dev->pDevice, &allocParams);
@@ -740,7 +750,8 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
         pMemory = nvKms->allocateMemory(nv_dev->pDevice, &allocParams);
     }
 
-    if (pMemory == NULL && (p->flags & NV_GEM_ALLOC_NO_SCANOUT)) {
+    if (pMemory == NULL && allocParams.useVideoMemory &&
+        (p->flags & NV_GEM_ALLOC_NO_SCANOUT)) {
         if (__ratelimit(&log_rs)) {
             NV_DRM_DEV_LOG_INFO(
                     nv_dev,
