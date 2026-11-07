@@ -1635,10 +1635,19 @@ void nvDpyUpdateHdmiVRRCaps(NVDpyEvoPtr pDpyEvo)
                                        !nvkms_conceal_vrr_caps();
 
     const NvU32 edidVrrMin = pParsedEdid->info.hdmiForumInfo.vrr_min;
+    const NvU32 edidVrrMax = pParsedEdid->info.hdmiForumInfo.vrr_max;
+
+    /*
+     * HDMI 2.1: VRRmin is 1-48 Hz, VRRmax is 0 (up to the Base Refresh Rate)
+     * or >= 100 Hz.  Anything else is an invalid HF-VSDB; don't use VRR.
+     */
+    const NvBool edidVrrValid =
+        (edidVrrMin >= 1) && (edidVrrMin <= 48) &&
+        ((edidVrrMax == 0) || (edidVrrMax >= 100));
 
     nvAssert(pParsedEdid->valid);
 
-    if (dispSupportsVrr && (edidVrrMin > 0)) {
+    if (dispSupportsVrr && edidVrrValid) {
         if (nvDpyIsAdaptiveSyncDefaultlisted(pDpyEvo)) {
             pDpyEvo->vrr.type =
                 NVKMS_DPY_VRR_TYPE_ADAPTIVE_SYNC_DEFAULTLISTED;

@@ -266,6 +266,35 @@ static NvBool GetEdidMinRefreshRate(
     return TRUE;
 }
 
+/*
+ * Highest refresh rate the EDID allows VRR at for an Adaptive-Sync display:
+ * the DP range limits, or the HDMI 2.1 HF-VSDB VRRmax.  0 means no limit.
+ */
+static NvU32 GetEdidMaxRefreshRate(
+    const NVDpyEvoRec *pDpyEvo,
+    const NVHwModeTimingsEvo *pTimings)
+{
+    const NVParsedEdidEvoRec *pParsedEdid = &pDpyEvo->parsedEdid;
+    NVT_PROTOCOL sinkProtocol;
+
+    if (!pParsedEdid->valid) {
+        return 0;
+    }
+
+    if (nvDpyUsesDPLib(pDpyEvo)) {
+        sinkProtocol = NVT_PROTOCOL_DP;
+    } else if (nvDpyIsHdmiEvo(pDpyEvo)) {
+        sinkProtocol = NVT_PROTOCOL_HDMI;
+    } else {
+        return 0;
+    }
+
+    return NvTiming_GetVrrFmax(&pParsedEdid->info,
+                               NULL,
+                               nvGetRefreshRatex10K(pTimings) / 10000,
+                               sinkProtocol);
+}
+
 /*! Adjust mode timings as necessary for VRR. */
 void nvAdjustHwModeTimingsForVrrEvo(const NVDpyEvoRec *pDpyEvo,
                                     const enum NvKmsRequestedVrrType vrrType,
@@ -310,6 +339,21 @@ void nvAdjustHwModeTimingsForVrrEvo(const NVDpyEvoRec *pDpyEvo,
     // refresh rate.
     if (nvGetRefreshRatex10K(pTimings) < ((NvU64) 11000 * minRefreshRate)) {
         return;
+    }
+
+    /*
+     * Disallow VRR on Adaptive-Sync displays if the refresh rate is above the
+     * EDID's VRR maximum (DP range limits, HDMI 2.1 VRRmax).  Round like
+     * drm_mode_vrefresh(), so a 240.002 Hz mode passes a 240 Hz limit.
+     */
+    if ((pDpyEvo->vrr.type == NVKMS_DPY_VRR_TYPE_ADAPTIVE_SYNC_DEFAULTLISTED) ||
+        (pDpyEvo->vrr.type == NVKMS_DPY_VRR_TYPE_ADAPTIVE_SYNC_NON_DEFAULTLISTED)) {
+        const NvU32 maxRefreshRate = GetEdidMaxRefreshRate(pDpyEvo, pTimings);
+
+        if ((maxRefreshRate != 0) &&
+            (((nvGetRefreshRatex10K(pTimings) + 5000) / 10000) > maxRefreshRate)) {
+            return;
+        }
     }
 
     /*

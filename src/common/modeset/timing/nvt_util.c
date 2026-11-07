@@ -573,4 +573,97 @@ NvU32 NvTiming_GetVrrFmin(
     return fmin;
 }
 
+//
+// Highest refresh rate the sink supports VRR at, from the same EDID/DisplayID
+// sources NvTiming_GetVrrFmin() uses for the minimum. 0 means no limit beyond
+// the mode's own refresh rate.
+//
+CODE_SEGMENT(PAGE_DD_CODE)
+NvU32 NvTiming_GetVrrFmax(
+    const NVT_EDID_INFO *pEdidInfo,
+    const NVT_DISPLAYID_2_0_INFO *pDisplayIdInfo,
+    NvU32 nominalRefreshRateHz,
+    NVT_PROTOCOL sinkProtocol)
+{
+    NvU32 fmax = 0;
+    NvU32 i;
+
+    // DP Adaptive Sync
+    if (sinkProtocol == NVT_PROTOCOL_DP)
+    {
+        if (pEdidInfo)
+        {
+            // G-SYNC modules manage their own range.
+            if (pEdidInfo->nvdaVsdbInfo.valid)
+            {
+                return 0;
+            }
+
+            if (pEdidInfo->ext_displayid.version)
+            {
+                fmax = pEdidInfo->ext_displayid.range_limits[0].vfreq_max;
+            }
+
+            if (pEdidInfo->ext_displayid20.version && pEdidInfo->ext_displayid20.range_limits.seamless_dynamic_video_timing_change)
+            {
+                fmax = pEdidInfo->ext_displayid20.range_limits.vfreq_max;
+            }
+
+            // DisplayID 2.0 extension: the Adaptive Sync descriptor for this refresh rate
+            if (pEdidInfo->ext_displayid20.version && pEdidInfo->ext_displayid20.total_adaptive_sync_descriptor != 0)
+            {
+                for (i = 0; i < pEdidInfo->ext_displayid20.total_adaptive_sync_descriptor; i++)
+                {
+                    if ((pEdidInfo->ext_displayid20.adaptive_sync_descriptor[i].max_rr == nominalRefreshRateHz) ||
+                        (nominalRefreshRateHz == 0))
+                    {
+                        fmax = pEdidInfo->ext_displayid20.adaptive_sync_descriptor[i].max_rr;
+                        break;
+                    }
+                }
+            }
+
+            if (!fmax)
+            {
+                for (i = 0; i < NVT_EDID_MAX_LONG_DISPLAY_DESCRIPTOR; i++)
+                {
+                    if (pEdidInfo->ldd[i].tag == NVT_EDID_DISPLAY_DESCRIPTOR_DRL)
+                    {
+                        fmax = pEdidInfo->ldd[i].u.range_limit.max_v_rate;
+                    }
+                }
+            }
+        }
+
+        // Native Display ID 2.0
+        if (pDisplayIdInfo)
+        {
+            for (i = 0; i < pDisplayIdInfo->total_adaptive_sync_descriptor; i++)
+            {
+                if ((pDisplayIdInfo->adaptive_sync_descriptor[i].max_rr == nominalRefreshRateHz) ||
+                    (nominalRefreshRateHz == 0))
+                {
+                    fmax = pDisplayIdInfo->adaptive_sync_descriptor[i].max_rr;
+                    break;
+                }
+            }
+            if (!fmax)
+            {
+                fmax = pDisplayIdInfo->range_limits.vfreq_max;
+            }
+        }
+    }
+
+    // HDMI 2.1 VRR: VRRmax 0 means up to the mode's Base Refresh Rate.
+    else if (sinkProtocol == NVT_PROTOCOL_HDMI)
+    {
+        if (pEdidInfo)
+        {
+            fmax = pEdidInfo->hdmiForumInfo.vrr_max;
+        }
+    }
+
+    return fmax;
+}
+
 POP_SEGMENTS
