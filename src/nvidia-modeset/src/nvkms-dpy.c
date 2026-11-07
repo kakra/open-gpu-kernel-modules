@@ -476,6 +476,15 @@ static void ApplyNewEdid(
     /* Write information about the parsed EDID to the infoString. */
     LogEdid(pDpyEvo, pInfoString);
 
+    /*
+     * HDMI VRR caps come only from the EDID (nvDpyUpdateHdmiVRRCaps), which
+     * never clears them; reset here so a new EDID without valid VRR caps
+     * doesn't keep the previous sink's.  DP sets vrr.type in EnableVRR().
+     */
+    if (!nvConnectorUsesDPLib(pDpyEvo->pConnectorEvo)) {
+        pDpyEvo->vrr.type = NVKMS_DPY_VRR_TYPE_NONE;
+    }
+
     if (pDpyEvo->parsedEdid.valid) {
         /*
          * check 3D Vision capability
