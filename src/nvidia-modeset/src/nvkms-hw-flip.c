@@ -1231,17 +1231,38 @@ static NvBool UpdateCursorLayerFlipEvoHwState(
     NVFlipEvoHwState *pFlipState)
 {
     if (pParams->cursor.imageSpecified) {
+        NVSurfaceEvoPtr pSurfaceEvo;
+
         if (!nvAssignCursorSurface(pOpenDev, pDevEvo, &pParams->cursor.image,
-                                   &pFlipState->cursor.pSurfaceEvo)) {
+                                   &pSurfaceEvo)) {
             return FALSE;
         }
 
-        if (pFlipState->cursor.pSurfaceEvo != NULL) {
-            pFlipState->cursor.cursorCompParams =
-                pParams->cursor.image.cursorCompParams;
-        }
+        /*
+         * Only mark the cursor image dirty if it changed. nvidia-drm specifies
+         * the image on every commit that includes the cursor plane, including
+         * position-only moves. Programming the image goes through the core
+         * channel, and the core channel update's ELV release also reaches the
+         * VRR heads the cursor isn't on: moving the cursor on one head would
+         * run the other VRR heads at up to their maximum refresh rate.
+         * pFlipState->cursor starts out as the current hardware state. The
+         * same comparison is done by SetCursorImageOneHead().
+         */
+        if ((pSurfaceEvo != pFlipState->cursor.pSurfaceEvo) ||
+            ((pSurfaceEvo != NULL) &&
+             (nvkms_memcmp(&pParams->cursor.image.cursorCompParams,
+                           &pFlipState->cursor.cursorCompParams,
+                           sizeof(pFlipState->cursor.cursorCompParams)) != 0))) {
 
-        pFlipState->dirty.cursorSurface = TRUE;
+            pFlipState->cursor.pSurfaceEvo = pSurfaceEvo;
+
+            if (pSurfaceEvo != NULL) {
+                pFlipState->cursor.cursorCompParams =
+                    pParams->cursor.image.cursorCompParams;
+            }
+
+            pFlipState->dirty.cursorSurface = TRUE;
+        }
     }
 
     if (pParams->cursor.positionSpecified) {
@@ -2520,6 +2541,28 @@ void nvFlipEvoOneHead(
     }
 
     UpdateHDMIVsifMetadata(pDevEvo, pFlipState, sd, head);
+
+    /*
+     * A flip that only moves a visible cursor doesn't update a channel that
+     * releases ELV, so with VRR active the new position wouldn't be shown
+     * until the unstall timer fires; trigger the unstall now. A flip with a
+     * layer, cursor image, or core channel change releases ELV itself.
+     */
+    if (pFlipState->dirty.cursorPosition &&
+        (pSdHeadState->cursor.pSurfaceEvo != NULL) &&
+        !pFlipState->dirty.cursorSurface &&
+        !pFlipState->dirty.viewPortPointIn &&
+        !pFlipState->dirty.olut && !hdrDirty && !passthroughDirty) {
+        NvBool layerDirty = FALSE;
+
+        for (layer = 0; layer < pDevEvo->head[head].numLayers; layer++) {
+            layerDirty = layerDirty || pFlipState->dirty.layer[layer];
+        }
+
+        if (!layerDirty) {
+            nvTriggerVrrUnstallCursorFlip(pDevEvo->gpus[sd].pDispEvo, head);
+        }
+    }
 
     for (layer = 0; layer < pDevEvo->head[head].numLayers; layer++) {
         if (!pFlipState->dirty.layer[layer]) {

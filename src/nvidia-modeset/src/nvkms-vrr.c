@@ -1329,6 +1329,35 @@ void nvTriggerVrrUnstallMoveCursor(NVDispEvoPtr pDispEvo, const NvU32 head)
 }
 
 /*!
+ * Trigger a VRR unstall right away for a flip that only moved the cursor.
+ *
+ * Unlike cursor motion through NVKMS_IOCTL_MOVE_CURSOR, a flip is the client
+ * presenting a new frame, and no window flip will follow to show it. So don't
+ * make it wait for the unstall timer: release ELV on this head now, and clear
+ * the head's pending cursor motion so the timer doesn't unstall it again.
+ */
+void nvTriggerVrrUnstallCursorFlip(NVDispEvoPtr pDispEvo, const NvU32 head)
+{
+    NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
+    NvU32 apiHead;
+
+    if (!nvHeadIsActive(pDispEvo, head)) {
+        return;
+    }
+
+    for (apiHead = 0; apiHead < NVKMS_MAX_HEADS_PER_DISP; apiHead++) {
+        NVDispApiHeadStateEvoRec *pApiHeadState =
+            &pDispEvo->apiHeadState[apiHead];
+
+        if (pApiHeadState->vrr.active &&
+            ((pApiHeadState->hwHeadsMask & NVBIT(head)) != 0)) {
+            pDevEvo->cursorHal->ReleaseElv(pDevEvo, head);
+            pApiHeadState->vrr.pendingCursorMotion = NV_FALSE;
+        }
+    }
+}
+
+/*!
  * Trigger a VRR unstall in response to a cursor image change.
  */
 void nvTriggerVrrUnstallSetCursorImage(NVDispEvoPtr pDispEvo,

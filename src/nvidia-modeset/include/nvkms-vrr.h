@@ -59,6 +59,7 @@ void nvApplyVrrBaseFlipOverrides(const NVDispEvoRec *pDispEvo, NvU32 head,
                                  const NVFlipChannelEvoHwState *pOld,
                                  NVFlipChannelEvoHwState *pNew);
 void nvTriggerVrrUnstallMoveCursor(NVDispEvoPtr pDispEvo, const NvU32 head);
+void nvTriggerVrrUnstallCursorFlip(NVDispEvoPtr pDispEvo, const NvU32 head);
 void nvTriggerVrrUnstallSetCursorImage(NVDispEvoPtr pDispEvo,
                                        NvBool elvReleased);
 void nvGetDpyMinRefreshRateValidValues(
