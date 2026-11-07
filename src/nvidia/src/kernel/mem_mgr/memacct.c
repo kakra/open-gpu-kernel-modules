@@ -294,18 +294,11 @@ void memacctReleaseCharge(MemoryCharge *pCharge)
     notify = NV_FALSE;
     if (g_memacct.impl == CGROUP_IMPL_OS)
     {
-        NvBool overSoftLimitBefore;
-        NvBool overSoftLimitAfter;
-
         NV_PRINTF(LEVEL_INFO, "release %llu for pool 0x%016llx\n", pCharge->size,
             (NvU64)pCharge->osPool);
 
-        overSoftLimitBefore = osCgroupCanEvict(NULL, pCharge->osPool);
-        osMemacctReleaseCharge(pCharge->osPool, pCharge->size);
-        overSoftLimitAfter = osCgroupCanEvict(NULL, pCharge->osPool);
-
-        if (overSoftLimitBefore && !overSoftLimitAfter)
-            notify = NV_TRUE;
+        // osPool may be freed once released; the OS layer does both soft limit checks
+        notify = osMemacctReleaseCharge(pCharge->osPool, pCharge->size);
     }
     else
     {

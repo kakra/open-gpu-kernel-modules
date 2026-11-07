@@ -315,7 +315,7 @@ NvU32 NV_API_CALL os_cgroup_implementation(void);
 void* NV_API_CALL os_dmem_cgroup_register_region(const char *name, NvU64 size, NvU64 precharge, void **prechargePool);
 void NV_API_CALL os_dmem_cgroup_unregister_region(void *region, void *prechargePool, NvU64 precharge);
 NV_STATUS NV_API_CALL os_dmem_cgroup_try_charge(void *region, NvU64 size, void **ret_pool, void **ret_limit_pool);
-void NV_API_CALL os_dmem_cgroup_uncharge(void *pool, NvU64 size);
+NvBool NV_API_CALL os_dmem_cgroup_uncharge(void *pool, NvU64 size);
 void NV_API_CALL os_dmem_cgroup_pool_state_put(void *pool);
 NvBool NV_API_CALL os_dmem_cgroup_state_evict_valuable(void *limit_pool, void *test_pool, NvBool ignore_low, NvBool *ret_hit_low);
 void* NV_API_CALL os_cgroup_get_from_fd(NvU32 fd);
@@ -327,7 +327,7 @@ void* NV_API_CALL os_cgroup_parent(void *cgroup);
 #define os_dmem_cgroup_register_region(...)      NULL
 #define os_dmem_cgroup_unregister_region(...)
 #define os_dmem_cgroup_try_charge(...)           NV_OK
-#define os_dmem_cgroup_uncharge(...)
+#define os_dmem_cgroup_uncharge(...)            NV_FALSE
 #define os_dmem_cgroup_pool_state_put(...)
 #define os_dmem_cgroup_state_evict_valuable(...) NV_FALSE
 #define os_cgroup_get_from_fd(...)               NULL
