@@ -3628,9 +3628,9 @@ void* NV_API_CALL os_dmem_cgroup_register_region(const char *name, NvU64 size, N
     {
         .size = size,
     };
-    region = dmem_cgroup_register_region(&init, name);
+    region = dmem_cgroup_register_region(&init, "%s", name);
 #else
-    region = dmem_cgroup_register_region(size, name);
+    region = dmem_cgroup_register_region(size, "%s", name);
 #endif
     if (IS_ERR(region))
     {
@@ -3670,9 +3670,29 @@ NV_STATUS NV_API_CALL os_dmem_cgroup_try_charge(void *region, NvU64 size, void *
     return NV_OK;
 }
 
-void NV_API_CALL os_dmem_cgroup_uncharge(void *pool, NvU64 size)
+//
+// Uncharge and report whether the pool went from above its effective
+// dmem.min to at or below it. dmem_cgroup_uncharge() drops the css and
+// pool references the charge held, so the "after" check can't be done by
+// the caller: the pool may already be freed. Both are freed only after an
+// RCU grace period, so keep it alive with rcu_read_lock() across the
+// uncharge and the second check.
+//
+NvBool NV_API_CALL os_dmem_cgroup_uncharge(void *pool, NvU64 size)
 {
+    bool overMinBefore;
+    bool overMinAfter;
+
+    if (pool == NULL)
+        return NV_FALSE;
+
+    rcu_read_lock();
+    overMinBefore = dmem_cgroup_state_evict_valuable(NULL, pool, true, NULL);
     dmem_cgroup_uncharge(pool, size);
+    overMinAfter = dmem_cgroup_state_evict_valuable(NULL, pool, true, NULL);
+    rcu_read_unlock();
+
+    return overMinBefore && !overMinAfter;
 }
 
 void NV_API_CALL os_dmem_cgroup_pool_state_put(void *pool)
@@ -3692,7 +3712,7 @@ NvBool NV_API_CALL os_dmem_cgroup_state_evict_valuable(void *limit_pool, void *t
 void* NV_API_CALL os_dmem_cgroup_register_region(const char *name, NvU64 size, NvU64 precharge, void **prechargePool) { return NULL; }
 void NV_API_CALL os_dmem_cgroup_unregister_region(void *region, void *prechargePool, NvU64 precharge) {}
 NV_STATUS NV_API_CALL os_dmem_cgroup_try_charge(void *region, NvU64 size, void **ret_pool, void **ret_limit_pool) { return NV_OK; }
-void NV_API_CALL os_dmem_cgroup_uncharge(void *pool, NvU64 size) {}
+NvBool NV_API_CALL os_dmem_cgroup_uncharge(void *pool, NvU64 size) { return NV_FALSE; }
 void NV_API_CALL os_dmem_cgroup_pool_state_put(void *pool) {}
 NvBool NV_API_CALL os_dmem_cgroup_state_evict_valuable(void *limit_pool, void *test_pool, NvBool ignore_low, NvBool *ret_hit_low) { return NV_FALSE; }
 #endif

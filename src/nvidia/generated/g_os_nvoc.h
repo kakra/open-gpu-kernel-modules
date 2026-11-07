@@ -347,7 +347,7 @@ ClientGroupID osClientGroupID(NvU64 process, void *pidInfo); // from osGetCurren
 void *osCgroupRegisterRegion(OBJGPU *pGpu, NvU64 size, NvU64 precharge, void **prechargePool);
 void osCgroupUnregisterRegion(void *region, void *prechargePool, NvU64 precharge);
 NV_STATUS osMemacctTryCharge(void *pRegion, NvLength size, void **ppPool, void **limitPool);
-void osMemacctReleaseCharge(void *pool, NvLength size);
+NvBool osMemacctReleaseCharge(void *pool, NvLength size);
 void osMemacctPoolStatePut(void *pool);
 void *osCgroupGetFromFd(NvS32 fd);
 void osCgroupPut(void *cgroup);

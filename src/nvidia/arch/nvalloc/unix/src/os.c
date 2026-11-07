@@ -2304,9 +2304,9 @@ NV_STATUS osMemacctTryCharge(void *pRegion, NvLength size, void **ppPool, void *
     return os_dmem_cgroup_try_charge(pRegion, size, ppPool, limitPool);
 }
 
-void osMemacctReleaseCharge(void *pool, NvLength size)
+NvBool osMemacctReleaseCharge(void *pool, NvLength size)
 {
-    os_dmem_cgroup_uncharge(pool, size);
+    return os_dmem_cgroup_uncharge(pool, size);
 }
 
 void osMemacctPoolStatePut(void *pool)
