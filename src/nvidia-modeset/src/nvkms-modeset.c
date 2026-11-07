@@ -722,6 +722,16 @@ AssignProposedModeSetNVFlipEvoHwState(
     }
 
     /*
+     * nvUpdateFlipEvoHwState() only marks the cursor image dirty if it differs
+     * from pFlip, which was cleared above rather than holding the current
+     * hardware state: always program a specified cursor image here, or hiding
+     * the cursor in a modeset wouldn't take effect.
+     */
+    if (pRequestHead->flip.cursor.imageSpecified) {
+        pFlip->dirty.cursorSurface = TRUE;
+    }
+
+    /*
      * EVO3 hal simulates USE_CORE_LUT behavior.
      * NVDisplay window channel does allow to change the input LUT
      * on immediate flips, therefore force disable tearing
