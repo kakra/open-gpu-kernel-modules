@@ -2489,8 +2489,13 @@ _pfmreqhndlrCallPshareStatus
             _pfmreqhndlrResetCounter(pPfmreqhndlrData, PFM_REQ_HNDLR_LIMIT(PFM_REQ_HNDLR_TGPU_SENSOR), timeStamp);
             _pfmreqhndlrResetCounter(pPfmreqhndlrData, PFM_REQ_HNDLR_LIMIT(PFM_REQ_HNDLR_PPMD_SENSOR), timeStamp);
 
+            //
+            // NV_ERR_INVALID_DATA: the limit is advertised but not provided
+            // right now, which the spec allows; see _pfmreqhndlrUpdatePpmdLimit().
+            //
             lclStatus = _pfmreqhndlrUpdateTgpuLimit(pPlatformRequestHandler, pGpu);
-            if ((NV_OK == status) && (NV_ERR_NOT_SUPPORTED != lclStatus))
+            if ((NV_OK == status) && (NV_ERR_NOT_SUPPORTED != lclStatus) &&
+                (NV_ERR_INVALID_DATA != lclStatus))
             {
                 status = lclStatus;
             }
@@ -2499,7 +2504,8 @@ _pfmreqhndlrCallPshareStatus
             {
                 // Run time PPMD update from the system
                 lclStatus = _pfmreqhndlrUpdatePpmdLimit(pPlatformRequestHandler, pGpu, NV_FALSE);
-                if ((NV_OK == status) && (NV_ERR_NOT_SUPPORTED != lclStatus))
+                if ((NV_OK == status) && (NV_ERR_NOT_SUPPORTED != lclStatus) &&
+                    (NV_ERR_INVALID_DATA != lclStatus))
                 {
                     status = lclStatus;
                 }
