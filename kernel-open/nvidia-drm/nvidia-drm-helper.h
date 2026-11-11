@@ -363,10 +363,30 @@ nv_drm_connector_attach_encoder(struct drm_connector *connector,
 #endif
 }
 
+#include <drm/drm_edid.h>
+
+/*
+ * Publish the EDID exactly as NVKMS read it. The legacy struct edid
+ * interface sizes the blob from the base block's extension count, which
+ * drops the blocks announced by an HDMI Forum EEODB (HDMI 2.1 sinks with
+ * more than one extension block keep the base count at 1).
+ */
 static inline int
 nv_drm_connector_update_edid_property(struct drm_connector *connector,
-                                      const struct edid *edid)
+                                      const struct edid *edid,
+                                      size_t size)
 {
+#if defined(NV_DRM_EDID_CONNECTOR_UPDATE_PRESENT)
+    const struct drm_edid *drm_edid = drm_edid_alloc(edid, size);
+
+    if (drm_edid != NULL) {
+        int ret = drm_edid_connector_update(connector, drm_edid);
+
+        drm_edid_free(drm_edid);
+        return ret;
+    }
+#endif
+
 #if defined(NV_DRM_CONNECTOR_FUNCS_HAVE_MODE_IN_NAME)
     return drm_mode_connector_update_edid_property(connector, edid);
 #else

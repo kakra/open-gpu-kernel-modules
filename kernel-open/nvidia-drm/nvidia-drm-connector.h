@@ -59,6 +59,7 @@ struct nv_drm_connector {
 
     struct nv_drm_encoder *nv_detected_encoder;
     struct edid *edid;
+    size_t edid_size;
 
     enum NvKmsContentProtection cp;
     bool cp_event_pending;

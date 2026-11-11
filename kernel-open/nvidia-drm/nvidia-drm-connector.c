@@ -392,6 +392,7 @@ __nv_drm_detect_encoder(struct NvKmsKapiDynamicDisplayParams *pDetectParams,
                 memcpy(nv_connector->edid,
                        pDetectParams->edid.buffer,
                        pDetectParams->edid.bufferSize);
+                nv_connector->edid_size = pDetectParams->edid.bufferSize;
             } else {
                 NV_DRM_LOG_ERR("Out of Memory");
             }
@@ -422,6 +423,7 @@ static enum drm_connector_status __nv_drm_connector_detect_internal(
     if (nv_connector->edid != NULL) {
         nv_drm_free(nv_connector->edid);
         nv_connector->edid = NULL;
+        nv_connector->edid_size = 0;
     }
 
     nv_drm_connector_set_allm_capable(nv_connector, NV_FALSE);
@@ -900,7 +902,8 @@ static int nv_drm_connector_get_modes(struct drm_connector *connector)
 
 
     if (nv_connector->edid != NULL) {
-        nv_drm_connector_update_edid_property(connector, nv_connector->edid);
+        nv_drm_connector_update_edid_property(connector, nv_connector->edid,
+                                              nv_connector->edid_size);
     }
 
     nv_drm_connector_clear_native_modes(nv_connector);

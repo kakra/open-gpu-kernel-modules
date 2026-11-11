@@ -1731,6 +1731,23 @@ compile_test() {
             compile_check_conftest "$CODE" "NV_DRM_ATOMIC_HELPER_LEGACY_GAMMA_SET_PRESENT" "" "functions"
         ;;
 
+        drm_edid_connector_update)
+            #
+            # Determine if the function drm_edid_connector_update() is
+            # present, together with the struct drm_edid interface
+            # (drm_edid_alloc()/drm_edid_free()) it takes.
+            #
+            # Added in v6.0 (2022) by the struct drm_edid series.
+            #
+            CODE="
+            #include <drm/drm_edid.h>
+            void conftest_drm_edid_connector_update(void) {
+                drm_edid_connector_update();
+            }"
+
+            compile_check_conftest "$CODE" "NV_DRM_EDID_CONNECTOR_UPDATE_PRESENT" "" "functions"
+        ;;
+
         drm_plane_create_color_properties)
             #
             # Determine if the function drm_plane_create_color_properties() is
