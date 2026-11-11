@@ -65,6 +65,7 @@ NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_connector_attach_hdr_output_metadata_p
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_plane_create_color_properties
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_plane_create_zpos_immutable_property
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_atomic_helper_legacy_gamma_set
+NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_edid_connector_update
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += vmf_insert_mixed
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_gem_prime_mmap
 NV_CONFTEST_FUNCTION_COMPILE_TESTS += drm_sysfs_connector_property_event
