@@ -402,73 +402,189 @@ get_nv_encoder_from_nvkms_display(struct drm_device *dev,
     return NULL;
 }
 
+static void nv_drm_record_event(struct nv_drm_device *nv_dev,
+                                NvKmsKapiDisplay hDisplay,
+                                enum NvKmsContentProtection cp,
+                                unsigned int events);
+
 void nv_drm_handle_display_change(struct nv_drm_device *nv_dev,
                                   NvKmsKapiDisplay hDisplay)
 {
-    struct drm_device *dev = nv_dev->dev;
-    struct nv_drm_encoder *nv_encoder = NULL;
+    /*
+     * Resolving the display walks the encoder list, which belongs to
+     * mode_config.mutex; the event thread must not wait for it, so the
+     * lookup moves to the work along with the marking.
+     */
+    nv_drm_record_event(nv_dev, hDisplay, NVKMS_CONTENT_PROTECTION_OFF,
+                        NV_DRM_EVENT_CONNECTION);
+}
 
-    mutex_lock(&dev->mode_config.mutex);
+void nv_drm_handle_display_connection_update(struct nv_drm_device *nv_dev,
+                                             NvKmsKapiDisplay hDisplay)
+{
+    struct drm_device *dev = nv_dev->dev;
+    struct nv_drm_encoder *nv_encoder;
 
     nv_encoder = get_nv_encoder_from_nvkms_display(dev, hDisplay);
-
-    mutex_unlock(&dev->mode_config.mutex);
-
     if (nv_encoder == NULL) {
         return;
     }
 
-    nv_drm_connector_mark_connection_status_dirty(nv_encoder->nv_connector);
+    if (nv_encoder->nv_connector == NULL) {
+        return;
+    }
 
-    queue_delayed_work(nv_drm_percpu_wq, &nv_dev->hotplug_event_work, 0);
+    nv_drm_connector_mark_connection_status_dirty(nv_encoder->nv_connector);
+}
+
+/*
+ * Record what changed for hDisplay.  The event thread owns no connector
+ * state and must not wait for the modeset locks, so this only fills the slot
+ * and queues the work; the work resolves the display and publishes.  If the
+ * display is already recorded, its slot is updated: the newest cp value wins
+ * and the flags accumulate.
+ *
+ * cp is only stored when NV_DRM_EVENT_CP_STATE is set; the other callers
+ * pass NVKMS_CONTENT_PROTECTION_OFF and the value is unused.
+ */
+static void nv_drm_record_event(struct nv_drm_device *nv_dev,
+                                NvKmsKapiDisplay hDisplay,
+                                enum NvKmsContentProtection cp,
+                                unsigned int events)
+{
+    struct nv_drm_display_event *pending = NULL;
+    unsigned int i;
+
+    spin_lock(&nv_dev->display_event_lock);
+
+    for (i = 0; i < nv_dev->num_display_events; i++) {
+        if (nv_dev->display_events[i].display == hDisplay) {
+            pending = &nv_dev->display_events[i];
+            break;
+        }
+    }
+
+    if (pending == NULL &&
+        nv_dev->num_display_events < NVKMS_KAPI_MAX_CONNECTORS) {
+        pending = &nv_dev->display_events[nv_dev->num_display_events++];
+        pending->display = hDisplay;
+        pending->cp_changed = FALSE;
+        pending->topology_changed = FALSE;
+        pending->connection_changed = FALSE;
+        pending->dynamic_connected = FALSE;
+    }
+
+    if (pending == NULL) {
+        NV_DRM_DEV_LOG_ERR(nv_dev,
+                           "Dropped display event for display %d", hDisplay);
+        spin_unlock(&nv_dev->display_event_lock);
+        return;
+    }
+
+    if (events & NV_DRM_EVENT_CP_STATE) {
+        pending->cp = cp;
+        pending->cp_changed = TRUE;
+    }
+
+    if (events & NV_DRM_EVENT_TOPOLOGY) {
+        pending->topology_changed = TRUE;
+    }
+
+    if (events & NV_DRM_EVENT_CONNECTION) {
+        pending->connection_changed = TRUE;
+    }
+
+    if (events & NV_DRM_EVENT_DYNAMIC_CONNECTED) {
+        pending->dynamic_connected = TRUE;
+    }
+
+    spin_unlock(&nv_dev->display_event_lock);
+
+    queue_delayed_work(nv_drm_percpu_wq,
+                       &nv_dev->content_protection_event_work, 0);
 }
 
 void nv_drm_handle_display_cp_change(struct nv_drm_device *nv_dev,
                                      NvKmsKapiDisplay hDisplay,
                                      enum NvKmsContentProtection cp)
 {
-    struct drm_device *dev = nv_dev->dev;
-    struct nv_drm_encoder *nv_encoder = NULL;
+    nv_drm_record_event(nv_dev, hDisplay, cp, NV_DRM_EVENT_CP_STATE);
+}
 
-    mutex_lock(&dev->mode_config.mutex);
+void nv_drm_handle_display_cp_update(struct nv_drm_device *nv_dev,
+                                     NvKmsKapiDisplay hDisplay,
+                                     enum NvKmsContentProtection cp)
+{
+    struct drm_device *dev = nv_dev->dev;
+    struct nv_drm_encoder *nv_encoder;
+
     nv_encoder = get_nv_encoder_from_nvkms_display(dev, hDisplay);
     if (nv_encoder == NULL) {
-        mutex_unlock(&dev->mode_config.mutex);
+        NV_DRM_DEV_LOG_ERR(nv_dev,
+                           "Encoder not found for display %d", hDisplay);
         return;
     }
 
     /*
-     * Defer the DRM content protection update to a workqueue so that it
-     * doesn't block flip events while waiting for dev->mode_config.connection_mutex.
+     * nv_drm_connector_update_content_protection() reads this field and
+     * requires mode_config.mutex for it, which is held here.
      */
+    if (nv_encoder->nv_connector == NULL) {
+        return;
+    }
+
     nv_encoder->nv_connector->cp = cp;
-    nv_encoder->nv_connector->cp_event_pending = true;
-    mutex_unlock(&dev->mode_config.mutex);
-    queue_delayed_work(nv_drm_percpu_wq, &nv_dev->content_protection_event_work, 0);
+    nv_drm_connector_update_content_protection(nv_encoder->nv_connector);
 }
 
 void nv_drm_handle_display_cp_topology_change(struct nv_drm_device *nv_dev,
+                                              NvKmsKapiDisplay hDisplay)
+{
+    nv_drm_record_event(nv_dev, hDisplay, NVKMS_CONTENT_PROTECTION_OFF,
+                        NV_DRM_EVENT_TOPOLOGY);
+}
+
+void nv_drm_handle_display_cp_topology_update(struct nv_drm_device *nv_dev,
                                               NvKmsKapiDisplay hDisplay,
                                               const void *topology)
 {
     struct drm_device *dev = nv_dev->dev;
-    struct nv_drm_encoder *nv_encoder = NULL;
-
-    mutex_lock(&dev->mode_config.mutex);
+    struct nv_drm_encoder *nv_encoder;
 
     nv_encoder = get_nv_encoder_from_nvkms_display(dev, hDisplay);
     if (nv_encoder == NULL) {
-        NV_DRM_DEV_LOG_ERR(nv_dev, "Encoder not found for display %d", hDisplay);
-        goto out;
+        NV_DRM_DEV_LOG_ERR(nv_dev,
+                           "Encoder not found for display %d", hDisplay);
+        return;
     }
-    nv_drm_connector_update_topology_property(nv_encoder->nv_connector, topology);
 
-out:
-    mutex_unlock(&dev->mode_config.mutex);
+    if (nv_encoder->nv_connector == NULL) {
+        return;
+    }
+
+    nv_drm_connector_update_topology_property(nv_encoder->nv_connector,
+                                              topology);
 }
 
 void nv_drm_handle_dynamic_display_connected(struct nv_drm_device *nv_dev,
                                              NvKmsKapiDisplay hDisplay)
+{
+    /*
+     * Adding the encoder takes mode_config.mutex, which the event thread
+     * must not wait for; the work adds it before publishing anything else
+     * recorded for the display.
+     */
+    nv_drm_record_event(nv_dev, hDisplay, NVKMS_CONTENT_PROTECTION_OFF,
+                        NV_DRM_EVENT_DYNAMIC_CONNECTED);
+}
+
+/*
+ * Called from the display event work with no DRM lock held:
+ * nv_drm_add_encoder() takes mode_config.mutex itself.  Returns true if an
+ * encoder was added and a hotplug event should be sent.
+ */
+bool nv_drm_handle_dynamic_display_connect_update(struct nv_drm_device *nv_dev,
+                                                  NvKmsKapiDisplay hDisplay)
 {
     struct drm_device *dev = nv_dev->dev;
 
@@ -477,17 +593,20 @@ void nv_drm_handle_dynamic_display_connected(struct nv_drm_device *nv_dev,
 
     /*
      * Look for an existing encoder with the same hDisplay and
-     * use it if available.
+     * use it if available.  Only this work adds encoders after load, so
+     * the result stays valid after the lock is dropped.
      */
 
+    mutex_lock(&dev->mode_config.mutex);
     nv_encoder = get_nv_encoder_from_nvkms_display(dev, hDisplay);
+    mutex_unlock(&dev->mode_config.mutex);
 
     if (nv_encoder != NULL) {
         NV_DRM_DEV_LOG_INFO(
             nv_dev,
             "Encoder with NvKmsKapiDisplay 0x%08x already exists.",
             hDisplay);
-        return;
+        return false;
     }
 
     encoder = nv_drm_add_encoder(dev, hDisplay);
@@ -497,9 +616,9 @@ void nv_drm_handle_dynamic_display_connected(struct nv_drm_device *nv_dev,
             nv_dev,
             "Failed to add encoder for NvKmsKapiDisplay 0x%08x",
             hDisplay);
-        return;
+        return false;
     }
 
-    queue_delayed_work(nv_drm_percpu_wq, &nv_dev->hotplug_event_work, 0);
+    return true;
 }
 #endif

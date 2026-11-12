@@ -534,7 +534,6 @@ struct NvKmsKapiEventDisplayCpChanged {
 
 struct NvKmsKapiEventDisplayCpTopologyChanged {
     NvKmsKapiDisplay display;
-    const void *topology;
 };
 
 struct NvKmsKapiEventDynamicDisplayConnected {
@@ -969,6 +968,28 @@ struct NvKmsKapiFunctionsTable {
     (
         struct NvKmsKapiDevice *device,
         struct NvKmsKapiDynamicDisplayParams *params
+    );
+
+    /*!
+     * Read the HDCP topology of the specified display.
+     *
+     * \param [in]  device    A device allocated using allocateDevice().
+     *
+     * \param [in]  display   A display handle from getDisplays().
+     *
+     * \param [out] topology  Buffer of NVKMS_HDCP_TOPOLOGY_SIZE bytes.
+     *
+     * \param [out] valid     NV_FALSE when the topology was cleared and
+     *                        the buffer is zeroed; NULL may be passed.
+     *
+     * \return NV_TRUE on success, NV_FALSE otherwise.
+     */
+    NvBool (*getHdcpTopology)
+    (
+        struct NvKmsKapiDevice *device,
+        NvKmsKapiDisplay display,
+        void *topology,
+        NvBool *valid
     );
 
     /*!

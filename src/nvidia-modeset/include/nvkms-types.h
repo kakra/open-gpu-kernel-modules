@@ -1707,7 +1707,12 @@ typedef struct _NVConnectorEvoRec {
 
     NvEldCase audioDevEldCase[NV_MAX_AUDIO_DEVICE_ENTRIES];
 
-    NvU8 cpTopology[NVKMS_HDCP_TOPOLOGY_SIZE];
+    /*
+     * Whether the HDCP topology may be read from RM right now.  Sending the
+     * topology event with clear set means HDCP is off or being restarted,
+     * and RM must not be queried while its state is in flux.
+     */
+    NvBool cpTopologyValid;
 
     NvBool isHdmiEnabled;
 } NVConnectorEvoRec;

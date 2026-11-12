@@ -3068,6 +3068,51 @@ static NvBool GetDpyAttributeValidValues(struct NvKmsPerOpen *pOpen,
 
 
 /*!
+ * Read the HDCP topology of the specified display.
+ *
+ * The client asks for the data when it is ready for it; the topology event
+ * only reports that it changed.
+ */
+static NvBool GetHdcpTopology(struct NvKmsPerOpen *pOpen, void *pParamsVoid)
+{
+    struct NvKmsGetHdcpTopologyParams *pParams = pParamsVoid;
+    NVDpyEvoPtr pDpyEvo;
+
+    /*
+     * Writing through a caller supplied pointer is only safe for the kernel
+     * client.  A user space open cannot supply the pointer at all, but the
+     * type check is what the reader should see first.
+     */
+    if (pOpen->clientType != NVKMS_CLIENT_KERNEL_SPACE ||
+        pParams->reply.topology == NULL) {
+        return FALSE;
+    }
+
+    pDpyEvo = GetPerOpenDpy(pOpen, pParams->request.deviceHandle,
+                            pParams->request.dpyId);
+    if (pDpyEvo == NULL) {
+        return FALSE;
+    }
+
+    if (pDpyEvo->pConnectorEvo == NULL) {
+        return FALSE;
+    }
+
+    if (!pDpyEvo->pConnectorEvo->cpTopologyValid) {
+        nvkms_memset(pParams->reply.topology, 0, NVKMS_HDCP_TOPOLOGY_SIZE);
+        pParams->reply.valid = FALSE;
+        return TRUE;
+    }
+
+    nvGetContentProtectionTopology(pDpyEvo->pConnectorEvo,
+                                   pParams->reply.topology);
+    pParams->reply.valid = TRUE;
+
+    return TRUE;
+}
+
+
+/*!
  * Set the value of the specified attribute.
  */
 static NvBool SetDispAttribute(struct NvKmsPerOpen *pOpen,
@@ -5125,6 +5170,7 @@ NvBool nvKmsIoctl(
         ENTRY(NVKMS_IOCTL_GET_DPY_ATTRIBUTE, GetDpyAttribute),
         ENTRY(NVKMS_IOCTL_GET_DPY_ATTRIBUTE_VALID_VALUES,
               GetDpyAttributeValidValues),
+        ENTRY(NVKMS_IOCTL_GET_HDCP_TOPOLOGY, GetHdcpTopology),
         ENTRY(NVKMS_IOCTL_SET_DISP_ATTRIBUTE, SetDispAttribute),
         ENTRY(NVKMS_IOCTL_GET_DISP_ATTRIBUTE, GetDispAttribute),
         ENTRY(NVKMS_IOCTL_GET_DISP_ATTRIBUTE_VALID_VALUES,
@@ -6585,12 +6631,7 @@ static void SendDpyEventEvo(const NVDpyEvoRec *pDpyEvo,
         case NVKMS_EVENT_TYPE_DPY_CP_TOPOLOGY_CHANGED:
             event.u.dpyCpTopologyChanged.deviceHandle = deviceHandle;
             event.u.dpyCpTopologyChanged.dpyId = pDpyEvo->id;
-            event.u.dpyCpTopologyChanged.topology = (const void*)(pDpyEvo->pConnectorEvo->cpTopology);
-            if (clear) {
-                nvkms_memset(pDpyEvo->pConnectorEvo->cpTopology, 0, NVKMS_HDCP_TOPOLOGY_SIZE);
-            } else {
-                nvGetContentProtectionTopology(pDpyEvo->pConnectorEvo, pDpyEvo->pConnectorEvo->cpTopology);
-            }
+            pDpyEvo->pConnectorEvo->cpTopologyValid = !clear;
             break;
 
         case NVKMS_EVENT_TYPE_DYNAMIC_DPY_CONNECTED:

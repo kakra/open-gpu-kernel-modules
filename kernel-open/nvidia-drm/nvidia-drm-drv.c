@@ -185,8 +185,7 @@ static void nv_drm_event_callback(const struct NvKmsKapiEvent *event)
         case NVKMS_EVENT_TYPE_DPY_CP_TOPOLOGY_CHANGED:
             nv_drm_handle_display_cp_topology_change(
                 nv_dev,
-                event->u.displayCpTopologyChanged.display,
-                event->u.displayCpTopologyChanged.topology);
+                event->u.displayCpTopologyChanged.display);
             break;
 
         case NVKMS_EVENT_TYPE_DYNAMIC_DPY_CONNECTED:
@@ -328,7 +327,6 @@ static void nv_drm_sort_dynamic_displays_by_dp_addr
 {
     sort(infos, nDynamicDisplays, sizeof(*infos), nv_drm_disp_cmp, NULL);
 }
-
 
 /*
  * Helper function to initialize drm_device::mode_config from
@@ -859,33 +857,105 @@ static void nv_drm_handle_hotplug_event(struct work_struct *work)
     drm_kms_helper_hotplug_event(nv_dev->dev);
 }
 
-static void nv_drm_handle_content_protection_event_work(struct work_struct *work)
+/*
+ * Publish every recorded display event.  The topology read runs with no DRM
+ * lock held: the kapi call takes the global NVKMS lock, and nothing else in
+ * the driver takes a modeset lock while holding it.  The publication itself
+ * runs under the modeset locks, because the content protection property,
+ * nv_connector->cp and the connector status flag all belong to them.
+ */
+static void nv_drm_publish_display_events(struct nv_drm_device *nv_dev)
+{
+    struct drm_device *dev = nv_dev->dev;
+    struct nv_drm_display_event pending[NVKMS_KAPI_MAX_CONNECTORS];
+    unsigned int num_pending;
+    unsigned int i;
+    NvBool hotplug = FALSE;
+
+    /*
+     * Take the whole set under the lock and clear it before releasing.  An
+     * event arriving from here on gets a fresh slot and its own run of the
+     * work, so nothing recorded during this pass is lost.
+     */
+    spin_lock(&nv_dev->display_event_lock);
+    num_pending = nv_dev->num_display_events;
+    memcpy(pending, nv_dev->display_events,
+           num_pending * sizeof(pending[0]));
+    nv_dev->num_display_events = 0;
+    spin_unlock(&nv_dev->display_event_lock);
+
+    for (i = 0; i < num_pending; i++) {
+        u8 *topology = nv_dev->hdcp_topology;
+        NvBool valid = FALSE;
+        NvBool read_ok = FALSE;
+
+        /*
+         * A new MST display needs its encoder before the updates below can
+         * find it.  nv_drm_add_encoder() takes mode_config.mutex itself.
+         */
+        if (pending[i].dynamic_connected &&
+            nv_drm_handle_dynamic_display_connect_update(nv_dev,
+                                                         pending[i].display)) {
+            hotplug = TRUE;
+        }
+
+        if (pending[i].topology_changed) {
+            /*
+             * NVKMS fills the buffer with no DRM lock held and keeps no
+             * pointer to it; the property copies the bytes out before this
+             * slot is reused by the next iteration.  valid is FALSE when
+             * the topology was cleared: the buffer is zeroed and RM is not
+             * queried, because its state is in flux at that moment.
+             */
+            read_ok = nvKms->getHdcpTopology(nv_dev->pDevice,
+                                             pending[i].display, topology,
+                                             &valid);
+
+            if (!read_ok) {
+                NV_DRM_DEV_LOG_ERR(nv_dev,
+                                   "Failed to read HDCP topology for display "
+                                   "%d", pending[i].display);
+            }
+        }
+
+        mutex_lock(&dev->mode_config.mutex);
+        drm_modeset_lock(&dev->mode_config.connection_mutex, NULL);
+
+        if (pending[i].cp_changed) {
+            nv_drm_handle_display_cp_update(nv_dev, pending[i].display,
+                                            pending[i].cp);
+        }
+
+        if (read_ok) {
+            nv_drm_handle_display_cp_topology_update(nv_dev,
+                                                     pending[i].display,
+                                                     topology);
+        }
+
+        if (pending[i].connection_changed) {
+            nv_drm_handle_display_connection_update(nv_dev,
+                                                    pending[i].display);
+            hotplug = TRUE;
+        }
+
+        drm_modeset_unlock(&dev->mode_config.connection_mutex);
+        mutex_unlock(&dev->mode_config.mutex);
+    }
+
+    if (hotplug) {
+        queue_delayed_work(nv_drm_percpu_wq, &nv_dev->hotplug_event_work, 0);
+    }
+}
+
+static void nv_drm_handle_cp_event_work(struct work_struct *work)
 {
     struct delayed_work *dwork = to_delayed_work(work);
     struct nv_drm_device *nv_dev =
         container_of(dwork, struct nv_drm_device,
                      content_protection_event_work);
-    struct drm_device *dev = nv_dev->dev;
-    struct drm_connector *connector;
-    struct drm_connector_list_iter conn_iter;
 
-    mutex_lock(&dev->mode_config.mutex);
-    drm_modeset_lock(&dev->mode_config.connection_mutex, NULL);
+    nv_drm_publish_display_events(nv_dev);
 
-    drm_connector_list_iter_begin(dev, &conn_iter);
-
-    drm_for_each_connector_iter(connector, &conn_iter) {
-        struct nv_drm_connector *nv_connector = to_nv_connector(connector);
-        if (nv_connector->cp_event_pending) {
-            nv_connector->cp_event_pending = false;
-            nv_drm_connector_update_content_protection(nv_connector);
-        }
-    }
-
-    drm_connector_list_iter_end(&conn_iter);
-
-    drm_modeset_unlock(&dev->mode_config.connection_mutex);
-    mutex_unlock(&dev->mode_config.mutex);
 }
 
 static int nv_drm_dev_load(struct drm_device *dev)
@@ -1088,7 +1158,8 @@ static int nv_drm_dev_load(struct drm_device *dev)
 
     INIT_DELAYED_WORK(&nv_dev->hotplug_event_work, nv_drm_handle_hotplug_event);
     INIT_DELAYED_WORK(&nv_dev->content_protection_event_work,
-                      nv_drm_handle_content_protection_event_work);
+                      nv_drm_handle_cp_event_work);
+    spin_lock_init(&nv_dev->display_event_lock);
     atomic_set(&nv_dev->enable_event_handling, true);
 
     init_waitqueue_head(&nv_dev->flip_event_wq);
@@ -1132,11 +1203,14 @@ static void nv_drm_dev_unload(struct drm_device *dev)
      * can see enable_event_handling=true and call schedule_delayed_work() after
      * the cancel calls below return.  Neither worker takes nv_dev->lock, so
      * cancel_delayed_work_sync() cannot deadlock here.
+     *
+     * The display event work queues hotplug_event_work, so cancel it first;
+     * otherwise it could requeue the hotplug work after that was cancelled.
      */
 
     atomic_set(&nv_dev->enable_event_handling, false);
-    cancel_delayed_work_sync(&nv_dev->hotplug_event_work);
     cancel_delayed_work_sync(&nv_dev->content_protection_event_work);
+    cancel_delayed_work_sync(&nv_dev->hotplug_event_work);
     nv_drm_fence_deadline_fini(nv_dev);
 
     /* Clean up output polling */
@@ -2278,7 +2352,6 @@ static struct drm_driver nv_drm_driver = {
 #endif
 };
 
-
 /*
  * Update the global nv_drm_driver for the intended features.
  *
@@ -2303,8 +2376,6 @@ void nv_drm_update_drm_driver_features(void)
     nv_drm_driver.dumb_destroy     = nv_drm_dumb_destroy;
 #endif /* NV_DRM_DRIVER_HAS_DUMB_DESTROY */
 }
-
-
 
 #if defined(NV_DRM_DRM_MANAGED_H_PRESENT)
 /*

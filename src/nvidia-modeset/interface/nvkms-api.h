@@ -273,6 +273,7 @@ enum NvKmsIoctlCommand {
     NVKMS_IOCTL_GET_NEXT_EVENTS,
     NVKMS_IOCTL_MST_I2C_TRANSFER,
     NVKMS_IOCTL_QUERY_HEAD_RASTER,
+    NVKMS_IOCTL_GET_HDCP_TOPOLOGY,
 };
 
 
@@ -2980,6 +2981,37 @@ struct NvKmsGetDpyAttributeParams {
     struct NvKmsGetDpyAttributeReply reply;     /*! out */
 };
 
+struct NvKmsGetHdcpTopologyRequest {
+    NvKmsDeviceHandle deviceHandle;
+    NvKmsDispHandle dispHandle;
+    NVDpyId dpyId;
+};
+
+struct NvKmsGetHdcpTopologyReply {
+    /*
+     * Destination for NVKMS_HDCP_TOPOLOGY_SIZE bytes.  The caller owns the
+     * buffer and keeps it alive for the duration of the call; NVKMS writes
+     * the bytes into it and keeps no pointer.
+     *
+     * Only the kernel client can set this: for a user space client the
+     * dispatcher zeroes the reply area and copies in the request area
+     * only, so the pointer is NULL there and GetHdcpTopology() refuses.
+     */
+    void *topology;
+
+    /*
+     * NV_FALSE when the topology was cleared: HDCP is off or being
+     * restarted, RM is not queried and the buffer is returned zeroed.
+     * That is a state of the display, not a failure of the call.
+     */
+    NvBool valid;
+};
+
+struct NvKmsGetHdcpTopologyParams {
+    struct NvKmsGetHdcpTopologyRequest request; /*! in */
+    struct NvKmsGetHdcpTopologyReply reply;     /*! out */
+};
+
 
 struct NvKmsAttributeValidValuesCommonReply {
     NvBool readable;
@@ -3346,6 +3378,12 @@ struct NvKmsEventDpyCpChanged {
 struct NvKmsEventDpyCpTopologyChanged  {
     NvKmsDeviceHandle deviceHandle;
     NVDpyId dpyId;
+    /*
+     * Unused: the client reads the topology with
+     * NVKMS_IOCTL_GET_HDCP_TOPOLOGY instead.  Kept because it is the
+     * largest member of struct NvKmsEvent, whose size sets the stride of
+     * the GET_NEXT_EVENTS reply array shared with user space clients.
+     */
     const void *topology;
 };
 

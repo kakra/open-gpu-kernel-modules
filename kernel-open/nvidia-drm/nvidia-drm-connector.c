@@ -1795,8 +1795,8 @@ void nv_drm_connector_update_content_protection(struct nv_drm_connector *nv_conn
 #endif
 }
 
-int nv_drm_connector_update_topology_property(struct nv_drm_connector *nv_connector,
-                                              const void *topology)
+int nv_drm_connector_update_topology_property(
+    struct nv_drm_connector *nv_connector, const void *topology)
 {
 #ifdef NV_DRM_SUPPORT_CONTENT_PROTECTION_PROPERTY
     struct drm_connector *connector = &nv_connector->base;
@@ -1831,6 +1831,7 @@ int nv_drm_connector_update_topology_property(struct nv_drm_connector *nv_connec
                                             topology,
                                             &connector->base,
                                             nv_dev->nv_hdcp_topology_property);
+
     // Generate uevent on cp property when topology is updated
 #if defined(NV_DRM_SYSFS_CONNECTOR_PROPERTY_EVENT_PRESENT)
     drm_sysfs_connector_property_event(connector,
