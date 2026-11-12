@@ -3802,6 +3802,35 @@ static void SetContentType(
     }
 }
 
+static NvBool GetHdcpTopology(struct NvKmsKapiDevice *device,
+                              NvKmsKapiDisplay display,
+                              void *topology,
+                              NvBool *valid)
+{
+    struct NvKmsGetHdcpTopologyParams params = { };
+
+    if (device == NULL || topology == NULL) {
+        return NV_FALSE;
+    }
+
+    params.request.deviceHandle = device->hKmsDevice;
+    params.request.dispHandle = device->hKmsDisp;
+    params.request.dpyId = nvNvU32ToDpyId(display);
+    params.reply.topology = topology;
+
+    if (!nvkms_ioctl_from_kapi(device->pKmsOpen,
+                               NVKMS_IOCTL_GET_HDCP_TOPOLOGY,
+                               &params, sizeof(params))) {
+        return NV_FALSE;
+    }
+
+    if (valid != NULL) {
+        *valid = params.reply.valid;
+    }
+
+    return NV_TRUE;
+}
+
 static NvBool GetDisplayAttribute(
     struct NvKmsKapiDevice *device,
     NvKmsKapiDisplay display,
@@ -4423,8 +4452,6 @@ static void DispatchKmsEvent
         case NVKMS_EVENT_TYPE_DPY_CP_TOPOLOGY_CHANGED:
             kapiEvent.u.displayCpTopologyChanged.display =
                 nvDpyIdToNvU32(pEvent->u.dpyCpTopologyChanged.dpyId);
-            kapiEvent.u.displayCpTopologyChanged.topology =
-                pEvent->u.dpyCpTopologyChanged.topology;
             break;
         case NVKMS_EVENT_TYPE_DYNAMIC_DPY_CONNECTED:
             kapiEvent.u.dynamicDisplayConnected.display =
@@ -4807,6 +4834,7 @@ NvBool nvKmsKapiGetFunctionsTableInternal
 
     funcsTable->getStaticDisplayInfo   = GetStaticDisplayInfo;
     funcsTable->getDynamicDisplayInfo  = GetDynamicDisplayInfo;
+    funcsTable->getHdcpTopology        = GetHdcpTopology;
 
     funcsTable->allocateMemory       = AllocateMemory;
     funcsTable->importMemory         = ImportMemory;

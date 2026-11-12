@@ -193,6 +193,25 @@ struct nv_drm_deadline_slot {
 };
 #endif
 
+/*
+ * What changed for a display, recorded by the event thread.  The event
+ * thread only fills this in; the connector fields themselves are written by
+ * the work, under the modeset locks whose readers document that contract.
+ */
+struct nv_drm_display_event {
+    NvKmsKapiDisplay display;
+    enum NvKmsContentProtection cp;
+    NvBool cp_changed;
+    NvBool topology_changed;
+    NvBool connection_changed;
+    NvBool dynamic_connected;
+};
+
+#define NV_DRM_EVENT_CP_STATE      (1u << 0)
+#define NV_DRM_EVENT_TOPOLOGY      (1u << 1)
+#define NV_DRM_EVENT_CONNECTION    (1u << 2)
+#define NV_DRM_EVENT_DYNAMIC_CONNECTED (1u << 3)
+
 struct nv_drm_device {
     nv_gpu_info_t gpu_info;
     MIGDeviceId gpu_mig_device;
@@ -249,6 +268,24 @@ struct nv_drm_device {
     spinlock_t held_fbs_lock;
     struct delayed_work held_fbs_work;
     atomic_t enable_event_handling;
+
+    /*
+     * Displays with a pending event: the event thread records them here,
+     * nv_drm_publish_display_events() drains the set.  One slot per
+     * connector is enough because a display is recorded at most once, and a
+     * later event for the same display updates its slot.
+     */
+    spinlock_t display_event_lock;
+    unsigned int num_display_events;
+    struct nv_drm_display_event display_events[NVKMS_KAPI_MAX_CONNECTORS];
+
+    /*
+     * Scratch buffer for the HDCP topology read in
+     * nv_drm_publish_display_events().  Only that work uses it, and a work
+     * item never runs concurrently with itself, so no lock is needed; it
+     * lives here because it is too large for the kernel stack.
+     */
+    u8 hdcp_topology[NVKMS_HDCP_TOPOLOGY_SIZE];
 
     /**
      * @flip_event_wq:
