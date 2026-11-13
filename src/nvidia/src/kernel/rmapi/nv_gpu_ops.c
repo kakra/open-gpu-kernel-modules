@@ -6123,6 +6123,16 @@ static NV_STATUS channelAllocate(const gpuTsgHandle tsg,
         goto cleanup_free_virtual;
     }
 
+    //
+    // Notification memory has to start out idle (status == 0), but the backing
+    // sysmem is only zeroed when NVreg_InitializeSystemMemoryAllocations is
+    // set; otherwise it may still hold data from a previous user of the pages.
+    // A stale value is indistinguishable from a real channel error, so clear
+    // the whole notifier array (error, work submit token and key rotation)
+    // before it is published to the client.
+    //
+    portMemSet((void *)channel->errorNotifier, 0, errorNotifierSize);
+
     // Let's allocate the channel
     pAllocInfo->gpFifoAllocParams.hObjectError  = hErrorNotifier;
     status = getHandleForVirtualAddr(vaSpace,
@@ -11642,6 +11652,13 @@ NV_STATUS nvGpuOpsPagingChannelAllocate(struct gpuDevice *device,
         goto cleanup_free_error_notifier;
 
     NV_ASSERT(channel->errorNotifier);
+
+    //
+    // Same as channelAllocate(): the paging channel's notifiers are handed to
+    // the client through channelInfo->shadowErrorNotifier and must not contain
+    // stale data from the previous user of the pages.
+    //
+    portMemSet((void *)channel->errorNotifier, 0, errorNotifierSize);
 
     // Ideally, we need to acquire there locks (in that order):
     // a. RM API lock
