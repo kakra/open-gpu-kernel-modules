@@ -27,6 +27,7 @@
 #include "nvidia-drm-gem-nvkms-memory.h"
 #include "nvidia-drm-helper.h"
 #include "nv_drm_common_ioctl.h"
+#include "nv-vram-pressure.h"
 
 #include <drm/drm_drv.h>
 #include <drm/drm_prime.h>
@@ -703,6 +704,7 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
         nv_file->gem_alloc_fail_size != 0 &&
         nv_drm_gem_alloc_covers_failed(nv_file, p->memory_size, scanout) &&
         time_before(jiffies, nv_file->gem_alloc_fail_until)) {
+        os_vram_pressure_event(NV_VRAM_PRESSURE_GEM_BACKOFF, p->memory_size);
         ret = -ENOMEM;
         goto failed;
     }
@@ -746,6 +748,7 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
                     "Failed to allocate compressible NVKMS video memory of size %" NvU64_fmtu " for GEM object of %s[%d], retrying without compression",
                     p->memory_size, current->comm, task_pid_nr(current));
         }
+        os_vram_pressure_event(NV_VRAM_PRESSURE_GEM_NO_COMPRESSION, p->memory_size);
         p->compressible = 0;
         pMemory = nvKms->allocateMemory(nv_dev->pDevice, &allocParams);
     }
@@ -758,11 +761,13 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
                     "Failed to allocate NVKMS video memory for GEM object of %s[%d], trying to fall back to sysmem",
                     current->comm, task_pid_nr(current));
         }
+        os_vram_pressure_event(NV_VRAM_PRESSURE_GEM_SYSMEM_FALLBACK, p->memory_size);
         allocParams.useVideoMemory = false;
         pMemory = nvKms->allocateMemory(nv_dev->pDevice, &allocParams);
     }
 
     if (pMemory == NULL) {
+        os_vram_pressure_event(NV_VRAM_PRESSURE_GEM_ALLOC_FAIL, p->memory_size);
         ret = -ENOMEM;
         if (__ratelimit(&log_rs)) {
             NV_DRM_DEV_LOG_ERR(nv_dev,

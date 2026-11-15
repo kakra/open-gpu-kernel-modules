@@ -38,6 +38,7 @@
 #include <osapi.h>
 #include <rmapi/exports.h>
 #include <nv-unix-nvos-params-wrappers.h>
+#include <nv-vram-pressure.h>
 
 #include <nvos.h>
 #include <class/cl0000.h> // NV01_ROOT
@@ -702,6 +703,8 @@ NV_STATUS RmIoctl(
             NV_CTL_DEVICE_ONLY(nv);
 
             Nv04MapMemoryDmaWithSecInfo(pApi, secInfo);
+            if (pApi->status != NV_OK)
+                os_vram_pressure_event(NV_VRAM_PRESSURE_DMA_MAP_FAIL, pApi->length);
             break;
         }
 
@@ -718,6 +721,8 @@ NV_STATUS RmIoctl(
             NV_CTL_DEVICE_ONLY(nv);
 
             Nv04UnmapMemoryDmaWithSecInfo(pApi, secInfo);
+            if (pApi->status != NV_OK)
+                os_vram_pressure_event(NV_VRAM_PRESSURE_DMA_UNMAP_FAIL, pApi->size);
             break;
         }
 

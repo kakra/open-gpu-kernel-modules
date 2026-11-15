@@ -36,6 +36,7 @@
 #include "gpu/device/device.h"
 
 #include "gpu/mem_mgr/carveout_mgr.h"
+#include "nv-vram-pressure.h"
 
 #include "gpu/mem_mgr/sysmem_scrub.h"
 
@@ -551,6 +552,7 @@ sysmemConstruct_IMPL
                 const NvU64 failedPageSize = memdescGetPageSize(pMemDesc, AT_GPU);
 
                 pageSize = _sysmemGetNextSmallestPageSize(pGpu, &pAllocData->attr, &pAllocData->attr2);
+                os_vram_pressure_event(NV_VRAM_PRESSURE_SYSMEM_PAGE_RETRY, pAllocData->size);
 
                 //
                 // Tear down descriptor/OS state before making the carveout

@@ -243,6 +243,48 @@ nv_procfs_read_version(
 
 NV_DEFINE_SINGLE_NVRM_PROCFS_FILE(version);
 
+/*
+ * Diagnostic: how often RM and nvidia-drm took paths that only run when
+ * video memory is short (nv-vram-pressure.h). One line per event: name,
+ * count, bytes, CLOCK_MONOTONIC time of the last event in ns (0: never).
+ * The counters only grow; sample and difference them.
+ */
+static const char * const nv_vram_pressure_names[NV_VRAM_PRESSURE_EVENT_COUNT] =
+{
+    [NV_VRAM_PRESSURE_VIDMEM_ALLOC_FAIL]   = "vidmem_alloc_fail",
+    [NV_VRAM_PRESSURE_SYSMEM_PAGE_RETRY]   = "sysmem_page_retry",
+    [NV_VRAM_PRESSURE_DMA_MAP_FAIL]        = "dma_map_fail",
+    [NV_VRAM_PRESSURE_DMA_UNMAP_FAIL]      = "dma_unmap_fail",
+    [NV_VRAM_PRESSURE_GEM_NO_COMPRESSION]  = "gem_no_compression",
+    [NV_VRAM_PRESSURE_GEM_SYSMEM_FALLBACK] = "gem_sysmem_fallback",
+    [NV_VRAM_PRESSURE_GEM_ALLOC_FAIL]      = "gem_alloc_fail",
+    [NV_VRAM_PRESSURE_GEM_BACKOFF]         = "gem_backoff",
+};
+
+static int
+nv_procfs_read_vram_pressure(
+    struct seq_file *s,
+    void *v
+)
+{
+    NvU32 i;
+
+    seq_printf(s, "# event count bytes last_ns now_ns=%llu\n", ktime_get_ns());
+
+    for (i = 0; i < NV_VRAM_PRESSURE_EVENT_COUNT; i++)
+    {
+        NvU64 count, bytes, last_ns;
+
+        os_vram_pressure_get(i, &count, &bytes, &last_ns);
+        seq_printf(s, "%s %llu %llu %llu\n", nv_vram_pressure_names[i],
+                   count, bytes, last_ns);
+    }
+
+    return 0;
+}
+
+NV_DEFINE_SINGLE_PROCFS_FILE_READ_ONLY_WITHOUT_LOCK(vram_pressure);
+
 static void
 nv_procfs_close_file(
     nv_procfs_private_t *nvpp
@@ -1420,6 +1462,10 @@ int nv_procfs_init(void)
     nv_procfs_add_text_file(proc_nvidia_patches, "README", __README_patches);
 
     entry = NV_CREATE_PROC_FILE("version", proc_nvidia, version, NULL);
+    if (!entry)
+        goto failed;
+
+    entry = NV_CREATE_PROC_FILE("vram_pressure", proc_nvidia, vram_pressure, NULL);
     if (!entry)
         goto failed;
 

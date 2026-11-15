@@ -38,6 +38,7 @@
 #include "gpu/bus/kern_bus.h"
 
 #include "class/cl0040.h" // NV01_MEMORY_LOCAL_USER
+#include "nv-vram-pressure.h"
 
 /*!
  * _vidmemQueryAlignment
@@ -983,6 +984,13 @@ vidmemConstruct_IMPL
 done:
     if (pMemory->pCharge != NULL && rmStatus != NV_OK)
         memacctReleaseCharge(pMemory->pCharge);
+
+    // Diagnostic counter, /proc/driver/nvidia/vram_pressure.
+    if (rmStatus == NV_ERR_NO_MEMORY ||
+        rmStatus == NV_ERR_RESOURCE_ACCOUNTING_HARD_LIMIT_EXCEEDED)
+    {
+        os_vram_pressure_event(NV_VRAM_PRESSURE_VIDMEM_ALLOC_FAIL, pAllocData->size);
+    }
 
     //
     // If the allocation failed after curFbUsage was already incremented,

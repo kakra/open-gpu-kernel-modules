@@ -42,6 +42,7 @@
 #include <os/nv_memory_type.h>
 #include <os/nv_memory_area.h>
 #include <nv-caps.h>
+#include <nv-vram-pressure.h>
 
 #include "rs_access.h"
 
