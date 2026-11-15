@@ -1480,6 +1480,41 @@ void NV_API_CALL os_dump_stack(void)
     dump_stack();
 }
 
+/*
+ * Video memory pressure counters (nv-vram-pressure.h), read by
+ * /proc/driver/nvidia/vram_pressure. Updated without locks from RM and
+ * nvidia-drm error paths; a reader may see a count without its bytes for a
+ * moment, which a sampler can live with.
+ */
+static atomic64_t nv_vram_pressure_count[NV_VRAM_PRESSURE_EVENT_COUNT];
+static atomic64_t nv_vram_pressure_bytes[NV_VRAM_PRESSURE_EVENT_COUNT];
+static atomic64_t nv_vram_pressure_last_ns[NV_VRAM_PRESSURE_EVENT_COUNT];
+
+void NV_API_CALL os_vram_pressure_event(NvU32 event, NvU64 bytes)
+{
+    if (event >= NV_VRAM_PRESSURE_EVENT_COUNT)
+        return;
+
+    atomic64_inc(&nv_vram_pressure_count[event]);
+    atomic64_add(bytes, &nv_vram_pressure_bytes[event]);
+    atomic64_set(&nv_vram_pressure_last_ns[event], ktime_get_ns());
+}
+EXPORT_SYMBOL(os_vram_pressure_event);
+
+void NV_API_CALL os_vram_pressure_get(NvU32 event, NvU64 *count, NvU64 *bytes,
+                                      NvU64 *last_ns)
+{
+    if (event >= NV_VRAM_PRESSURE_EVENT_COUNT)
+    {
+        *count = *bytes = *last_ns = 0;
+        return;
+    }
+
+    *count   = atomic64_read(&nv_vram_pressure_count[event]);
+    *bytes   = atomic64_read(&nv_vram_pressure_bytes[event]);
+    *last_ns = atomic64_read(&nv_vram_pressure_last_ns[event]);
+}
+
 typedef struct os_spinlock_s
 {
     nv_spinlock_t      lock;
