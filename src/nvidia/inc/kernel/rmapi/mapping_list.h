@@ -59,6 +59,7 @@ struct _def_client_dma_mapping_info
     NvU32                 Flags;
     NvU32                 Flags2;
     NvBool                bP2P;
+    RsResourceRef        *pMemoryRef;                       // Resource the mapping was made from (compared only)
     NvU64                 mapPageSize;                      // Page size at which the memory is mapped.
     GMMU_APERTURE         aperture;
     NvBool                bNeedL2InvalidateAtUnmap;

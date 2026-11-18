@@ -1159,6 +1159,8 @@ virtmemMapTo_IMPL
     if (status != NV_OK)
         return status;
 
+    pDmaMappingInfo->pMemoryRef = pMemoryRef;
+
     if (bBar1P2P)
     {
         DMA_BAR1P2P_MAPPING_PRARAMS params = {0};
@@ -1521,6 +1523,28 @@ done:
 }
 
 /*!
+ * @brief Does a client DMA mapping descriptor belong to another resource than
+ *        the one being unmapped?
+ *
+ * The client mapping list is keyed by VA only, so a lookup by offset can
+ * return a different mapping that was placed in a page released by an
+ * earlier sub-page partial unmap.  The server always unmaps with the
+ * resource the inter-mapping was made from (serverInterUnmapMapping() sets
+ * hMappable from it), so compare that with the resource recorded at map
+ * time.  The reference is only compared, never dereferenced.
+ */
+static NvBool
+_virtmemDmaMappingIsForeign
+(
+    CLI_DMA_MAPPING_INFO *pDmaMappingInfo,
+    RsResourceRef        *pSrcMemoryRef
+)
+{
+    return (pSrcMemoryRef != NULL) && (pDmaMappingInfo->pMemoryRef != NULL) &&
+           (pDmaMappingInfo->pMemoryRef != pSrcMemoryRef);
+}
+
+/*!
  * @brief Unmap object from VirtualMemory object
  */
 NV_STATUS
@@ -1548,10 +1572,10 @@ virtmemUnmapFrom_IMPL
     CLI_DMA_MAPPING_INFO *pDmaMappingInfoUnmap = NULL;
 
     CLI_DMA_MAPPING_INFO *pDmaMappingInfo   = NULL;
+    RsResourceRef        *pSrcMemoryRef     = NULL;
 
     if (hMemory != NV01_NULL_OBJECT)
     {
-        RsResourceRef  *pSrcMemoryRef;
         Memory         *pMemorySrc;
 
         if (clientGetResourceRef(pClient, hMemory, &pSrcMemoryRef) != NV_OK)
@@ -1585,6 +1609,19 @@ virtmemUnmapFrom_IMPL
     NvU64 unmapSize = pParams->size;
 
     pDmaMappingInfo = intermapGetDmaMapping(pVirtualMemory, dmaOffset);
+
+    //
+    // A different mapping placed in a page released by an earlier sub-page
+    // partial unmap contains dmaOffset too.  It is not part of the request;
+    // treat the start as unregistered so the search below finds this
+    // resource's own remainder instead.
+    //
+    if ((pDmaMappingInfo != NULL) &&
+        _virtmemDmaMappingIsForeign(pDmaMappingInfo, pSrcMemoryRef))
+    {
+        pDmaMappingInfo = NULL;
+    }
+
     if (pDmaMappingInfo == NULL)
     {
         NvU64 unmapEnd;
@@ -1604,10 +1641,10 @@ virtmemUnmapFrom_IMPL
         // a page that is already gone.  Unmap that client remainder instead
         // of leaking it (virtmemDestruct does not walk pDmaMappingList).
         //
-        // Only accept a descriptor that starts exactly where that rounding
-        // put it.  Anything else, such as a different mapping placed in the
-        // released page, does not belong to the server fragment being
-        // unmapped.
+        // Only accept a descriptor of the same resource that starts exactly
+        // where that rounding put it.  Anything else, such as a different
+        // mapping placed in the released page, does not belong to the server
+        // fragment being unmapped.
         //
         // The request may cover only the start of that descriptor, e.g. a
         // page aligned unmap of [10, 12) after a hole [9.5, 10.5): the server
@@ -1631,7 +1668,8 @@ virtmemUnmapFrom_IMPL
 
             if ((pCandidate->mapPageSize != 0) &&
                 (pCandidate->DmaOffset > dmaOffset) &&
-                (pCandidate->DmaOffset == RM_ALIGN_UP(dmaOffset, pCandidate->mapPageSize)))
+                (pCandidate->DmaOffset == RM_ALIGN_UP(dmaOffset, pCandidate->mapPageSize)) &&
+                !_virtmemDmaMappingIsForeign(pCandidate, pSrcMemoryRef))
             {
                 pDmaMappingInfo = pCandidate;
                 break;
@@ -1764,6 +1802,7 @@ virtmemUnmapFrom_IMPL
 
         pDmaMappingInfoLeft->DmaOffset          = pDmaMappingInfo->DmaOffset;
         pDmaMappingInfoLeft->bP2P               = pDmaMappingInfo->bP2P;
+        pDmaMappingInfoLeft->pMemoryRef         = pDmaMappingInfo->pMemoryRef;
         pDmaMappingInfoLeft->addressTranslation = pDmaMappingInfo->addressTranslation;
         pDmaMappingInfoLeft->mapPageSize        = pDmaMappingInfo->mapPageSize;
 
@@ -1782,6 +1821,7 @@ virtmemUnmapFrom_IMPL
 
         pDmaMappingInfoRight->DmaOffset          = dmaOffset + unmapSize;
         pDmaMappingInfoRight->bP2P               = pDmaMappingInfo->bP2P;
+        pDmaMappingInfoRight->pMemoryRef         = pDmaMappingInfo->pMemoryRef;
         pDmaMappingInfoRight->addressTranslation = pDmaMappingInfo->addressTranslation;
         pDmaMappingInfoRight->mapPageSize        = pDmaMappingInfo->mapPageSize;
 
@@ -1801,6 +1841,7 @@ virtmemUnmapFrom_IMPL
 
         pDmaMappingInfoUnmap->DmaOffset          = dmaOffset;
         pDmaMappingInfoUnmap->bP2P               = pDmaMappingInfo->bP2P;
+        pDmaMappingInfoUnmap->pMemoryRef         = pDmaMappingInfo->pMemoryRef;
         pDmaMappingInfoUnmap->addressTranslation = pDmaMappingInfo->addressTranslation;
         pDmaMappingInfoUnmap->mapPageSize        = pDmaMappingInfo->mapPageSize;
 
