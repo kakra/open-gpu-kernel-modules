@@ -1583,7 +1583,27 @@ virtmemUnmapFrom_IMPL
 
     // Get DMA mapping info.
     pDmaMappingInfo = intermapGetDmaMapping(pVirtualMemory, dmaOffset);
-    NV_ASSERT_OR_RETURN(pDmaMappingInfo != NULL, NV_ERR_INVALID_OBJECT_HANDLE);
+    if (pDmaMappingInfo == NULL)
+    {
+        //
+        // Nothing is registered for this range any more.
+        //
+        // This happens when an earlier partial unmap already released the
+        // pages containing the request (the VA space splits at mapping page
+        // boundaries while the resource server tracks byte ranges), or when
+        // inter-mapping registration failed after the client mapping had
+        // been torn down.  Treat the unmap as a no-op so that cleanup paths
+        // (notably the automatic unmapping of back references in
+        // rs_client.c) can retire their own bookkeeping instead of failing
+        // and leaving stale inter-mapping nodes behind, which later surface
+        // as "Duplicate inter mapping" / "0 == (pMapNode->gpuMask & gpuMask)"
+        // failures on unrelated mappings.
+        //
+        NV_PRINTF(LEVEL_ERROR,
+                  "Unmap of unregistered DMA mapping range [0x%llX, 0x%llX); ignoring.\n",
+                  dmaOffset, dmaOffset + pParams->size);
+        return NV_OK;
+    }
     NvBool bPartialUnmap = dmaOffset != pDmaMappingInfo->DmaOffset || pParams->size != pDmaMappingInfo->pMemDesc->Size;
     NV_ASSERT_OR_RETURN(!bPartialUnmap || !bIsIndirectPeer, NV_ERR_INVALID_ARGUMENT);
 
