@@ -776,16 +776,25 @@ static void ReadAndApplyEdidEvo(
              * Note that this also takes care of HDMI FRL link re-assessment
              * on hotplugs.
              */
+            pDpyEvo->hdmi.frlRestoredAssessments = 0;
             nvDpyProbeMaxPixelClock(pDpyEvo);
         } else if (nvDpyIsHdmiEvo(pDpyEvo) &&
             nvHdmiDpySupportsFrl(pDpyEvo) &&
             pDpyEvo->hdmi.frlCapsRestored &&
-            (pDpyEvo->apiHead == NV_INVALID_HEAD)) {
+            (pDpyEvo->apiHead == NV_INVALID_HEAD) &&
+            (pDpyEvo->hdmi.frlRestoredAssessments <
+             MAX_RESTORED_FRL_ASSESSMENTS)) {
             /*
              * The FRL caps are left from an earlier link training because the
              * link couldn't be assessed. Try again while the display is off;
              * for a display in use, its next modeset's link training decides.
+             *
+             * Each try is a link training under nvkms_lock and the probe
+             * resets frlLinkFailures, so bound the tries in a counter of
+             * their own. Once they are used up, the restored caps stay until
+             * the sink is hotplugged or a modeset trains the link.
              */
+            pDpyEvo->hdmi.frlRestoredAssessments++;
             nvDpyProbeMaxPixelClock(pDpyEvo);
         } else if (nvDpyIsHdmiEvo(pDpyEvo) &&
             nvHdmiDpySupportsFrl(pDpyEvo) &&

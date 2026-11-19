@@ -2456,6 +2456,11 @@ typedef struct _NVDpyEvoRec {
         /* srcCaps and sinkCaps came from lastTrainedFrl, not an assessment. */
         NvBool frlCapsRestored                 : 1;
         NvU8 frlLinkFailures;
+        /*
+         * Link assessments of a display that is off while its caps are
+         * restored, since the caps were restored or the sink was hotplugged.
+         */
+        NvU8 frlRestoredAssessments;
 
         /*
          * The caps of the last link training that succeeded, and the EDID they

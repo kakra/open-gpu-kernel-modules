@@ -71,6 +71,9 @@ void nvTeardownHdmiLibrary(NVDevEvoRec *pDevEvo);
 
 NvBool nvHdmiFrlAssessLink(NVDpyEvoPtr pDpyEvo);
 NvBool nvHdmiFrlRestoreTrainedCaps(NVDpyEvoPtr pDpyEvo);
+
+/* Link assessments of a display that is off while its FRL caps are restored. */
+#define MAX_RESTORED_FRL_ASSESSMENTS 3
 NvBool nvHdmiDpySupportsFrl(const NVDpyEvoRec *pDpyEvo);
 NvBool nvHdmiScdcWantsForceFrl(const NVDpyEvoRec *pDpyEvo);
 void nvHdmiRefreshScdcSrcTestConfig(NVDpyEvoPtr pDpyEvo);

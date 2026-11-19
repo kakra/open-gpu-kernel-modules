@@ -2388,6 +2388,7 @@ NvBool nvHdmiFrlRestoreTrainedCaps(NVDpyEvoPtr pDpyEvo)
     pDpyEvo->hdmi.frlCapsRestored = TRUE;
 
     if (!wasRestored) {
+        pDpyEvo->hdmi.frlRestoredAssessments = 0;
         nvEvoLogDisp(pDpyEvo->pDispEvo, EVO_LOG_WARN,
                      "HDMI FRL link assessment failed, "
                      "keeping the caps of the last link training.");
