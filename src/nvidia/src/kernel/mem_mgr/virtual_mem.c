@@ -43,6 +43,7 @@
 #include "class/cl50a0.h" // NV50_MEMORY_VIRTUAL
 
 static void _virtmemFreeKernelMapping(OBJGPU *, CLI_DMA_MAPPING_INFO *);
+static void _virtmemFreeLeftoverDmaMappings(VirtualMemory *);
 
 /*!
  * _virtmemQueryVirtAllocParams
@@ -588,6 +589,114 @@ done:
 }
 
 /*!
+ * @brief Free DMA mappings that are still registered when the object dies
+ *
+ * Every DMA mapping has an inter-mapping in the resource server, which
+ * unmaps it before the object is destructed.  If the two disagree, for
+ * example after a partial unmap split them at different boundaries, a DMA
+ * mapping can outlive its inter-mapping.  It would keep its PTEs and a
+ * reference on the backing memory, and devMemoryTableNode, which is part of
+ * this object, would stay linked in Device::DevMemoryTable after the object
+ * is freed.  Unmap and drop whatever is left.
+ */
+static void
+_virtmemFreeLeftoverDmaMappings
+(
+    VirtualMemory *pVirtualMemory
+)
+{
+    Memory     *pMemory = staticCast(pVirtualMemory, Memory);
+    OBJGPU     *pGpu    = pMemory->pGpu;
+    RsClient   *pClient = RES_GET_CLIENT(pVirtualMemory);
+    OBJVASPACE *pVas    = NULL;
+    NvU32       count   = 0;
+
+    if (pVirtualMemory->pDmaMappingList == NULL)
+        return;
+
+    if (vaspaceGetByHandleOrDeviceDefault(pClient, RES_GET_HANDLE(pMemory->pDevice),
+                                          pVirtualMemory->hVASpace, &pVas) != NV_OK)
+    {
+        pVas = NULL;
+    }
+
+    while (pVirtualMemory->pDmaMappingList != NULL)
+    {
+        CLI_DMA_MAPPING_INFO *pDmaMappingInfo = pVirtualMemory->pDmaMappingList->Data;
+        NvU64                 dmaOffset       = pVirtualMemory->pDmaMappingList->keyStart;
+
+        if (pDmaMappingInfo != NULL)
+        {
+            dmaOffset = pDmaMappingInfo->DmaOffset;
+
+            NV_PRINTF(LEVEL_ERROR,
+                      "Freeing leftover DMA mapping [0x%llX, 0x%llX) of a destroyed VirtualMemory.\n",
+                      dmaOffset, dmaOffset + pDmaMappingInfo->pMemDesc->Size);
+
+            //
+            // Kernel and P2P mappings are never split, but they can still be
+            // left over: an unmap with a size of 0 that fails makes the
+            // resource server drop its inter-mapping anyway.  Tear down
+            // their extra state like virtmemUnmapFrom() does.
+            //
+            // An indirect peer mapping would also need memdescUnmapIommu(),
+            // but whether this one is cannot be told from here without
+            // dereferencing pMemoryRef, which may already be gone.
+            //
+            if (FLD_TEST_DRF(OS46, _FLAGS, _KERNEL_MAPPING, _ENABLE, pDmaMappingInfo->Flags))
+            {
+                if ((pDmaMappingInfo->KernelPriv != NULL) &&
+                    (memdescGetAddressSpace(pDmaMappingInfo->pMemDesc) == ADDR_SYSMEM))
+                {
+                    memdescUnmapOld(pDmaMappingInfo->pMemDesc, NV_TRUE,
+                                    pDmaMappingInfo->KernelVAddr,
+                                    pDmaMappingInfo->KernelPriv);
+                    pDmaMappingInfo->KernelPriv = NULL;
+                }
+                else if (memdescGetAddressSpace(pDmaMappingInfo->pMemDesc) == ADDR_FBMEM)
+                {
+                    _virtmemFreeKernelMapping(pGpu, pDmaMappingInfo);
+                }
+            }
+
+            if (RMCFG_CLASS_NV50_P2P && pDmaMappingInfo->bP2P)
+            {
+                dmaFreeBar1P2PMapping_HAL(GPU_GET_DMA(pGpu), pDmaMappingInfo);
+            }
+
+            if ((pVas != NULL) &&
+                (!pMemory->bRpcAlloc || gpuIsSplitVasManagementServerClientRmEnabled(pGpu)))
+            {
+                dmaFreeMap(pGpu, GPU_GET_DMA(pGpu), pVas, pVirtualMemory, pDmaMappingInfo, 0);
+            }
+
+            memdescFree(pDmaMappingInfo->pMemDesc);
+            memdescDestroy(pDmaMappingInfo->pMemDesc);
+            pDmaMappingInfo->pMemDesc = NULL;
+        }
+
+        // also unlinks devMemoryTableNode with the last mapping
+        if (intermapDelDmaMapping(pClient, pVirtualMemory, dmaOffset) != NV_OK)
+        {
+            //
+            // Should not happen. Do not loop forever; unlink the device
+            // table node at least, the object is about to be freed.
+            //
+            Device *pDevice = pMemory->pDevice;
+
+            btreeUnlink(&pVirtualMemory->devMemoryTableNode, &pDevice->DevMemoryTable);
+            pVirtualMemory->pDmaMappingList = NULL;
+            break;
+        }
+
+        count++;
+    }
+
+    NV_PRINTF(LEVEL_ERROR, "Freed %u leftover DMA mapping(s), hVASpace 0x%x.\n",
+              count, pVirtualMemory->hVASpace);
+}
+
+/*!
  * @brief Handle destruction of VirtualMemory specific fields
  */
 void
@@ -617,6 +726,8 @@ virtmemDestruct_IMPL
         return;
 
     NV_ASSERT(pMemDesc);
+
+    _virtmemFreeLeftoverDmaMappings(pVirtualMemory);
 
     memDestructCommon(pMemory);
 
@@ -1639,7 +1750,7 @@ virtmemUnmapFrom_IMPL
         // unmap of [a, b) the server keeps [b, hi) but the client keeps
         // [alignUp(b), hi), so a later unmap of the server fragment starts in
         // a page that is already gone.  Unmap that client remainder instead
-        // of leaking it (virtmemDestruct does not walk pDmaMappingList).
+        // of leaking it.
         //
         // Only accept a descriptor of the same resource that starts exactly
         // where that rounding put it.  Anything else, such as a different
