@@ -38,6 +38,7 @@
 #include "gpu/bus/p2p_api.h"
 #include "mem_mgr/gpu_vaspace.h"
 #include "kernel/rmapi/mapping_list.h"
+#include "nv-vram-pressure.h"
 
 #include "class/cl0070.h" // NV01_MEMORY_VIRTUAL
 #include "class/cl50a0.h" // NV50_MEMORY_VIRTUAL
@@ -1810,9 +1811,20 @@ virtmemUnmapFrom_IMPL
             // inter mapping" / "0 == (pMapNode->gpuMask & gpuMask)" failures
             // on unrelated mappings.
             //
+            if (pVirtualMemory->orphanedServerFragments > 0)
+            {
+                // most likely a fragment orphaned by the rounding above
+                pVirtualMemory->orphanedServerFragments--;
+                NV_PRINTF(LEVEL_INFO,
+                          "Unmap of server fragment [0x%llX, 0x%llX) without DMA mapping; ignoring.\n",
+                          dmaOffset, unmapEnd);
+                return NV_OK;
+            }
+
             NV_PRINTF(LEVEL_ERROR,
                       "Unmap of unregistered DMA mapping range [0x%llX, 0x%llX); ignoring.\n",
                       dmaOffset, unmapEnd);
+            os_vram_pressure_event(NV_VRAM_PRESSURE_DMA_UNMAP_UNREGISTERED, pParams->size);
             return NV_OK;
         }
     }
@@ -1868,6 +1880,17 @@ virtmemUnmapFrom_IMPL
 
         if (alignedHi <= alignedLo)
             return NV_ERR_INVALID_ARGUMENT;
+
+        //
+        // A server-side fragment left of or right of the request that lies
+        // entirely in the pages released here has no DMA mapping any more.
+        // Its later unmap is an expected no-op; remember it so that it is
+        // not reported as a mismatch.
+        //
+        if ((dmaOffset > mappedLo) && (alignedLo == mappedLo))
+            pVirtualMemory->orphanedServerFragments++;
+        if ((dmaOffset + unmapSize < mappedHi) && (alignedHi == mappedHi))
+            pVirtualMemory->orphanedServerFragments++;
 
         dmaOffset = alignedLo;
         unmapSize = alignedHi - alignedLo;

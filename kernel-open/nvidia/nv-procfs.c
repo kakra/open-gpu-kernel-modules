@@ -259,6 +259,7 @@ static const char * const nv_vram_pressure_names[NV_VRAM_PRESSURE_EVENT_COUNT] =
     [NV_VRAM_PRESSURE_GEM_SYSMEM_FALLBACK] = "gem_sysmem_fallback",
     [NV_VRAM_PRESSURE_GEM_ALLOC_FAIL]      = "gem_alloc_fail",
     [NV_VRAM_PRESSURE_GEM_BACKOFF]         = "gem_backoff",
+    [NV_VRAM_PRESSURE_DMA_UNMAP_UNREGISTERED] = "dma_unmap_unregistered",
 };
 
 static int

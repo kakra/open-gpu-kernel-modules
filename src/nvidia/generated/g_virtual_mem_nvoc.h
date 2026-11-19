@@ -99,6 +99,7 @@ struct VirtualMemory {
     NODE devMemoryTableNode;
     NODE *pDmaMappingList;
     NvBool bOptimizePageTableMempoolUsage;
+    NvU32 orphanedServerFragments;
 };
 
 

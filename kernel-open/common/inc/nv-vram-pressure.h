@@ -56,6 +56,8 @@ typedef enum
     NV_VRAM_PRESSURE_GEM_ALLOC_FAIL,
     /* nvidia-drm: a GEM allocation was refused by the allocation back-off. */
     NV_VRAM_PRESSURE_GEM_BACKOFF,
+    /* RM: an unmap found no DMA mapping in its range and was ignored. */
+    NV_VRAM_PRESSURE_DMA_UNMAP_UNREGISTERED,
     NV_VRAM_PRESSURE_EVENT_COUNT
 } nv_vram_pressure_event_t;
 
