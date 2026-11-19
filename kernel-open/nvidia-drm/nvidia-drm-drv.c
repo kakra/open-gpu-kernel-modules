@@ -86,6 +86,8 @@
 #include <linux/pci.h>
 #include <linux/workqueue.h>
 #include <linux/sort.h>
+#include <linux/sched.h>
+#include <linux/version.h>
 
 /*
  * Commit fcd70cd36b9b ("drm: Split out drm_probe_helper.h")
@@ -1138,6 +1140,14 @@ static int nv_drm_dev_load(struct drm_device *dev)
         if (!nv_drm_workthread_init(&nv_dev->vblank_worker, "nvidia-drm-vblank-notification")) {
             NV_DRM_DEV_LOG_WARN(nv_dev, "Failed to init vblank worker, vblank notification not enabled.");
         } else {
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
+            /*
+             * Enabling vblank callbacks for the first flip after an idle
+             * period goes through this worker; keep it from waiting behind
+             * normal tasks, like the NVKMS queue that delivers them.
+             */
+            sched_set_fifo_low(nv_dev->vblank_worker.q.q_kthread);
+#endif
 #if defined(NV_DRM_CRTC_FUNCS_HAS_GET_VBLANK_TIMESTAMP)
             /* See nv_drm_crtc_get_vblank_counter() */
             dev->max_vblank_count = NV_DRM_RASTER_FRAME_MASK;

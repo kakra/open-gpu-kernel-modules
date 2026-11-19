@@ -30,6 +30,7 @@
 #include <asm/div64.h> /* do_div() */
 #include <linux/sched.h>
 #include <linux/sched/signal.h>
+#include <linux/version.h>
 #include <linux/wait.h>
 #include <linux/random.h>
 #include <linux/file.h>
@@ -2240,6 +2241,19 @@ static int __init nvkms_init(void)
     if (ret != 0) {
         goto fail_kthread;
     }
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)
+    /*
+     * Vblank and flip completion callbacks reach nvidia-drm through this
+     * queue (RM event -> nvkms timer -> this thread). As a normal task it
+     * competes with everything else on a loaded system, and a callback
+     * that is late by more than a frame makes nvidia-drm send the flip
+     * event from its timeout with a stale timestamp. Run it at the lowest
+     * RT priority, like other kernel threads that sit in a latency path;
+     * this also keeps it out of sched_ext schedulers.
+     */
+    sched_set_fifo_low(nvkms_kthread_q.q_kthread);
+#endif
 
     ret = nv_kthread_q_init(&nvkms_deferred_close_kthread_q,
                             "nvidia-modeset/deferred_close_kthread_q");
