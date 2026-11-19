@@ -605,12 +605,8 @@ nv_drm_atomic_apply_modeset_config(struct drm_device *dev,
         const NvU64 submit_time = ktime_get_ns();
 
         for (i = 0; i < num_submitted_flips; i++) {
-            if (submitted_flips[i]->vrr) {
-                nv_drm_crtc_set_flip_raster_frame(submitted_crtcs[i],
-                                                  submitted_flips[i]);
-            }
-            WRITE_ONCE(submitted_flips[i]->kick_time, 0);
-            WRITE_ONCE(submitted_flips[i]->submit_time, submit_time);
+            nv_drm_crtc_set_flip_submit_time(submitted_crtcs[i],
+                                             submitted_flips[i], submit_time);
         }
     }
 

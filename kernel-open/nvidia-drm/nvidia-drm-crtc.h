@@ -559,6 +559,35 @@ void nv_drm_crtc_raster_update_all(struct drm_device *dev);
 void nv_drm_crtc_set_flip_raster_frame(struct nv_drm_crtc *nv_crtc,
                                        struct nv_drm_flip *nv_flip);
 
+/**
+ * nv_drm_crtc_set_flip_submit_time - Set the submit time (and, for VRR
+ * flips, the raster frame) of a flip that is still in flip_list of crtc.
+ *
+ * Like nv_drm_crtc_set_flip_kick_time(): once enqueued, a flip can be
+ * dequeued and freed by a flip event at any time, also by the event of an
+ * earlier flip on the same crtc, since flip_list completes the newest
+ * entry first. Only touch it while it is still queued.
+ */
+static inline void nv_drm_crtc_set_flip_submit_time(struct nv_drm_crtc *nv_crtc,
+                                                    struct nv_drm_flip *nv_flip,
+                                                    NvU64 submit_time)
+{
+    struct nv_drm_flip *nv_queued_flip;
+
+    spin_lock(&nv_crtc->flip_list_lock);
+    list_for_each_entry(nv_queued_flip, &nv_crtc->flip_list, list_entry) {
+        if (nv_queued_flip == nv_flip) {
+            if (nv_flip->vrr) {
+                nv_drm_crtc_set_flip_raster_frame(nv_crtc, nv_flip);
+            }
+            WRITE_ONCE(nv_flip->kick_time, 0);
+            WRITE_ONCE(nv_flip->submit_time, submit_time);
+            break;
+        }
+    }
+    spin_unlock(&nv_crtc->flip_list_lock);
+}
+
 void nv_drm_enumerate_crtcs_and_planes(
     struct nv_drm_device *nv_dev,
     const struct NvKmsKapiDeviceResourcesInfo *pResInfo);
