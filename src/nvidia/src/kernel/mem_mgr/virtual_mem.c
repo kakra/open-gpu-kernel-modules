@@ -1802,14 +1802,16 @@ virtmemUnmapFrom_IMPL
             // Nothing is registered for this range any more.
             //
             // This happens when an earlier partial unmap already released
-            // all pages of the request, or when inter-mapping registration
-            // failed after the client mapping had been torn down.  Treat the
-            // unmap as a no-op so that cleanup paths (notably the automatic
-            // unmapping of back references in rs_client.c) can retire their
-            // own bookkeeping instead of failing and leaving stale
-            // inter-mapping nodes behind, which later surface as "Duplicate
-            // inter mapping" / "0 == (pMapNode->gpuMask & gpuMask)" failures
-            // on unrelated mappings.
+            // all mapping pages of the request, or when inter-mapping
+            // registration failed after the client mapping had been torn
+            // down.  Treat the unmap as a no-op so that the resource server
+            // can retire its own inter-mapping instead of keeping a stale
+            // node, which a later map at the same dmaOffset would collide
+            // with ("Duplicate inter mapping detected").
+            //
+            // Apart from server fragments that a partial unmap above left
+            // entirely in released pages, each occurrence means the two
+            // lists disagreed; it is logged and counted, not handled.
             //
             if (pVirtualMemory->orphanedServerFragments > 0)
             {
