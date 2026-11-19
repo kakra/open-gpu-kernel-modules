@@ -73,6 +73,7 @@ static void __nv_drm_gem_nvkms_memory_free(struct nv_drm_gem_object *nv_gem)
     /* Free NvKmsKapiMemory handle associated with this gem object */
 
     nvKms->freeMemory(nv_dev->pDevice, nv_nvkms_memory->base.pMemory);
+    atomic_inc(&nv_dev->gem_nvkms_free_count);
 
     nv_drm_free(nv_nvkms_memory);
 }
@@ -631,8 +632,10 @@ done:
 /* Start over after this long past the end of the last back-off */
 #define NV_DRM_GEM_ALLOC_BACKOFF_RESET_MS 10000
 
-static void nv_drm_gem_alloc_failed(struct nv_drm_file *nv_file,
-                                    u64 size, bool scanout)
+static void nv_drm_gem_alloc_failed(struct nv_drm_device *nv_dev,
+                                    struct nv_drm_file *nv_file,
+                                    u64 size, bool scanout,
+                                    bool block_linear)
 {
     unsigned int delay_ms = nv_file->gem_alloc_fail_delay_ms;
 
@@ -647,18 +650,24 @@ static void nv_drm_gem_alloc_failed(struct nv_drm_file *nv_file,
 
     nv_file->gem_alloc_fail_size = size;
     nv_file->gem_alloc_fail_scanout = scanout;
+    nv_file->gem_alloc_fail_block_linear = block_linear;
+    nv_file->gem_alloc_fail_free_count =
+        atomic_read(&nv_dev->gem_nvkms_free_count);
     nv_file->gem_alloc_fail_delay_ms = delay_ms;
     nv_file->gem_alloc_fail_until = jiffies + msecs_to_jiffies(delay_ms);
 }
 
 /*
  * Whether an allocation of size bytes is at least as hard to satisfy as the
- * last failed one of this file: not smaller, and scanout if that one was.
+ * last failed one of this file: not smaller, of the same layout, and scanout
+ * if that one was.
  */
 static bool nv_drm_gem_alloc_covers_failed(const struct nv_drm_file *nv_file,
-                                           u64 size, bool scanout)
+                                           u64 size, bool scanout,
+                                           bool block_linear)
 {
     return size >= nv_file->gem_alloc_fail_size &&
+           block_linear == nv_file->gem_alloc_fail_block_linear &&
            (scanout || !nv_file->gem_alloc_fail_scanout);
 }
 
@@ -702,11 +711,32 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
      */
     if (nv_drm_gem_alloc_backoff_module_param &&
         nv_file->gem_alloc_fail_size != 0 &&
-        nv_drm_gem_alloc_covers_failed(nv_file, p->memory_size, scanout) &&
+        nv_drm_gem_alloc_covers_failed(nv_file, p->memory_size, scanout,
+                                       p->block_linear) &&
+        atomic_read(&nv_dev->gem_nvkms_free_count) ==
+            nv_file->gem_alloc_fail_free_count &&
         time_before(jiffies, nv_file->gem_alloc_fail_until)) {
         os_vram_pressure_event(NV_VRAM_PRESSURE_GEM_BACKOFF, p->memory_size);
+        nv_file->gem_alloc_backoff_refused++;
         ret = -ENOMEM;
         goto failed;
+    }
+
+    /*
+     * Refusals are not logged one by one, that is the flood the back-off
+     * avoids. Say once, with the next real attempt, how many there were.
+     */
+    if (nv_file->gem_alloc_backoff_refused != 0) {
+        if (__ratelimit(&log_rs)) {
+            NV_DRM_DEV_LOG_INFO(
+                    nv_dev,
+                    "Refused %u GEM allocations of %s[%d] of at least %" NvU64_fmtu " bytes during a %u ms back-off",
+                    nv_file->gem_alloc_backoff_refused,
+                    current->comm, task_pid_nr(current),
+                    nv_file->gem_alloc_fail_size,
+                    nv_file->gem_alloc_fail_delay_ms);
+        }
+        nv_file->gem_alloc_backoff_refused = 0;
     }
 
     if ((nv_nvkms_memory =
@@ -776,7 +806,8 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
                                scanout ? "scanout" : "offscreen",
                                current->comm, task_pid_nr(current));
         }
-        nv_drm_gem_alloc_failed(nv_file, p->memory_size, scanout);
+        nv_drm_gem_alloc_failed(nv_dev, nv_file, p->memory_size, scanout,
+                                p->block_linear);
         goto nvkms_alloc_memory_failed;
     }
 
@@ -786,7 +817,8 @@ int nv_drm_gem_alloc_nvkms_memory_ioctl(struct drm_device *dev,
      * buffer after each failed allocation would otherwise reset it every
      * time and let every retry through again.
      */
-    if (nv_drm_gem_alloc_covers_failed(nv_file, p->memory_size, scanout)) {
+    if (nv_drm_gem_alloc_covers_failed(nv_file, p->memory_size, scanout,
+                                       p->block_linear)) {
         nv_file->gem_alloc_fail_size = 0;
         nv_file->gem_alloc_fail_delay_ms = 0;
     }

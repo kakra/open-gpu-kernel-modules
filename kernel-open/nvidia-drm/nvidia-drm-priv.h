@@ -270,6 +270,13 @@ struct nv_drm_device {
     atomic_t enable_event_handling;
 
     /*
+     * Counts freed NVKMS GEM objects, so that the GEM allocation back-off
+     * of a file ends when memory was given back, see
+     * nv_drm_gem_alloc_nvkms_memory_ioctl().
+     */
+    atomic_t gem_nvkms_free_count;
+
+    /*
      * Displays with a pending event: the event thread records them here,
      * nv_drm_publish_display_events() drains the set.  One slot per
      * connector is enough because a display is recorded at most once, and a
@@ -444,7 +451,10 @@ struct nv_drm_file {
     u64 gem_alloc_fail_size;
     unsigned long gem_alloc_fail_until;
     unsigned int gem_alloc_fail_delay_ms;
+    int gem_alloc_fail_free_count;
     bool gem_alloc_fail_scanout;
+    bool gem_alloc_fail_block_linear;
+    unsigned int gem_alloc_backoff_refused;
 };
 
 /* A macro, struct drm_file is not defined in every file including this one */
