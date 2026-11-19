@@ -3395,11 +3395,14 @@ static bool __nv_drm_crtc_find_flip_vblank(const struct nv_drm_crtc *nv_crtc,
 /*
  * Send the events of pending flips whose vblank has been handled, or of all
  * pending flips if 'all' (using the latest vblank, or the current time if
- * none). Called with dev->event_lock held.
+ * none). Returns how many events were sent without their vblank having been
+ * handled. Called with dev->event_lock held.
  */
-static void __nv_drm_crtc_process_pending_flip_events(struct nv_drm_crtc *nv_crtc,
-                                                      bool all)
+static unsigned int __nv_drm_crtc_process_pending_flip_events(struct nv_drm_crtc *nv_crtc,
+                                                              bool all)
 {
+    unsigned int unmatched = 0;
+
     struct drm_device *dev = nv_crtc->base.dev;
     struct nv_drm_flip *nv_flip, *nv_next_flip;
 
@@ -3422,11 +3425,13 @@ static void __nv_drm_crtc_process_pending_flip_events(struct nv_drm_crtc *nv_crt
                 count = nv_crtc->vblank_history[last].count;
                 time = nv_crtc->vblank_history[last].time;
                 found = true;
+                unmatched++;
             }
         } else if (all) {
             count = drm_crtc_vblank_count(&nv_crtc->base);
             time = ktime_get_ns();
             found = true;
+            unmatched++;
         }
         spin_unlock_irqrestore(&dev->vblank_time_lock, irqflags);
 
@@ -3439,6 +3444,8 @@ static void __nv_drm_crtc_process_pending_flip_events(struct nv_drm_crtc *nv_crt
         __nv_drm_crtc_send_flip_events_at(nv_crtc, nv_flip, count, time);
         nv_drm_free(nv_flip);
     }
+
+    return unmatched;
 }
 
 /*
@@ -3541,11 +3548,26 @@ static void nv_drm_crtc_pending_flip_events_work(struct work_struct *work)
         container_of(to_delayed_work(work), struct nv_drm_crtc,
                      pending_flip_events_work);
     struct drm_device *dev = nv_crtc->base.dev;
+    /* A lost vblank callback per frame would otherwise log 20 lines a second */
+    static DEFINE_RATELIMIT_STATE(log_rs, 10 * HZ, 1);
     unsigned long irqflags;
+    unsigned int unmatched;
 
     spin_lock_irqsave(&dev->event_lock, irqflags);
-    __nv_drm_crtc_process_pending_flip_events(nv_crtc, true /* all */);
+    unmatched = __nv_drm_crtc_process_pending_flip_events(nv_crtc, true /* all */);
     spin_unlock_irqrestore(&dev->event_lock, irqflags);
+
+    /*
+     * No vblank callback came for these flips within the timeout, so their
+     * events went out with a timestamp that isn't their vblank's. A display
+     * that keeps hitting this is paced by the timeout, not by its vblanks.
+     */
+    if (unmatched != 0 && __ratelimit(&log_rs)) {
+        NV_DRM_DEV_LOG_INFO(to_nv_device(dev),
+                            "Head %u: sent %u flip event(s) after %u ms without a vblank callback",
+                            nv_crtc->head, unmatched,
+                            NV_DRM_PENDING_FLIP_EVENTS_TIMEOUT_MS);
+    }
 }
 
 /*
