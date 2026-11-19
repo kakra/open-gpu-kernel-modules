@@ -1056,11 +1056,22 @@ static NvBool LfcGetRefreshRange(const NVDispEvoRec *pDispEvo,
 
 /*!
  * Return whether a flip on the main layer of the apiHead is still pending.
+ *
+ * Asking RM takes the RM API lock and goes to GSP, and this runs with
+ * nvkms_lock held for every repeat. So only ask while the completion
+ * notifier event of the last main layer flip hasn't arrived yet, which for
+ * a frame that is due already happened on the common path. Without such
+ * events (no client asked for them) this asks every time, as before.
  */
 static NvBool LfcFlipPending(NVDispEvoPtr pDispEvo, const NvU32 apiHead)
 {
     NVDevEvoPtr pDevEvo = pDispEvo->pDevEvo;
+    NVVrrLfcState *pLfc = &pDispEvo->vrr.lfc[apiHead];
     NvU32 head;
+
+    if (!pLfc->flipPending) {
+        return FALSE;
+    }
 
     FOR_EACH_EVO_HW_HEAD_IN_MASK(pDispEvo->apiHeadState[apiHead].hwHeadsMask, head) {
         NvBool isIdle = FALSE;
@@ -1073,7 +1084,23 @@ static NvBool LfcFlipPending(NVDispEvoPtr pDispEvo, const NvU32 apiHead)
         }
     }
 
+    pLfc->flipPending = FALSE;
+
     return FALSE;
+}
+
+/*!
+ * The completion notifier event of a flip arrived: its flip is done.
+ */
+void nvVrrLfcNotifyFlipOccurred(NVDispEvoPtr pDispEvo, const NvU32 apiHead,
+                                const NvU32 layer)
+{
+    if ((layer != NVKMS_MAIN_LAYER) ||
+        (apiHead >= NVKMS_MAX_HEADS_PER_DISP)) {
+        return;
+    }
+
+    pDispEvo->vrr.lfc[apiHead].flipPending = FALSE;
 }
 
 static void LfcRepeatTimer(void *dataPtr, NvU32 apiHead);
@@ -1166,6 +1193,7 @@ void nvVrrLfcNotifyFlip(NVDispEvoPtr pDispEvo, const NvU32 apiHead,
         ((pLfc->lastFlipUs != 0) && (intervalUs <= NVKMS_VRR_LFC_MAX_FRAME_US)) ?
             intervalUs : 0;
     pLfc->lastFlipUs = nowUs;
+    pLfc->flipPending = TRUE;
 
     if (haveRange && (lastRepeatUs != 0)) {
         if ((nowUs - lastRepeatUs) >= minUs) {

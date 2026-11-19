@@ -2120,6 +2120,11 @@ typedef struct _NVVrrLfcState {
     NvU32 repeatsLeft;
     NvU32 collisions;
     NvBool active;
+    /*
+     * A main layer flip was submitted and its completion notifier event
+     * hasn't arrived yet; only then ask RM whether the channel is idle.
+     */
+    NvBool flipPending;
 } NVVrrLfcState;
 
 typedef struct _NVDispEvoRec {

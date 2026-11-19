@@ -48,6 +48,8 @@ void nvDisableVrr(NVDispEvoRec *pDispEvo, NVEvoUpdateState *updateState);
 void nvEnableVrr(NVDispEvoRec *pDispEvo, NVEvoUpdateState *updateState);
 void nvVrrLfcNotifyFlip(NVDispEvoPtr pDispEvo, const NvU32 apiHead,
                         const NvBool tearing);
+void nvVrrLfcNotifyFlipOccurred(NVDispEvoPtr pDispEvo, const NvU32 apiHead,
+                                const NvU32 layer);
 void nvVrrLfcCancel(NVDevEvoPtr pDevEvo);
 void nvCancelVrrFrameReleaseTimers(NVDevEvoPtr pDevEvo,
                                    const NvU32 applyAllowVrrApiHeadMask);

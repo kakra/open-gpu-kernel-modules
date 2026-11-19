@@ -4959,6 +4959,8 @@ CompletionNotifierEventDeferredWork(void *dataPtr, NvU32 dataU32)
 {
     NVDispFlipOccurredEventDataEvoRec *pEventData = dataPtr;
 
+    nvVrrLfcNotifyFlipOccurred(pEventData->pDispEvo, pEventData->apiHead,
+                               pEventData->layer);
     nvSendFlipOccurredEventEvo(pEventData->pDispEvo, pEventData->apiHead,
                                pEventData->layer);
 }
