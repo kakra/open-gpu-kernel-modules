@@ -3052,6 +3052,19 @@ void nvHdmiFrlSetConfig(NVDispEvoRec *pDispEvo, NvU32 head)
     NvBool trained;
 
     if (pFrlConfig->frlRate == HDMI_FRL_DATA_RATE_NONE) {
+        /*
+         * A modeset without FRL has no link training that could fail:
+         * whatever an earlier FRL modeset reported for this display is over.
+         */
+        if (pHeadState->pConnectorEvo != NULL) {
+            NVDpyEvoPtr pDpyEvo =
+                nvGetDpyEvoFromDispEvo(pDispEvo,
+                                       pHeadState->pConnectorEvo->displayId);
+
+            if (pDpyEvo != NULL) {
+                pDpyEvo->hdmi.frlLinkFailures = 0;
+            }
+        }
         return;
     }
 
