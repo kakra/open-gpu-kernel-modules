@@ -1023,9 +1023,11 @@ __nv_drm_connector_atomic_check(struct drm_connector *connector,
      * their page flip commits. Pass it with every modeset too, so it also
      * reaches a display that is newly driven by this CRTC or was recreated
      * by a hotplug. The DRM values are the NVKMS values minus one (NVKMS 0
-     * keeps its own default).
+     * keeps its own default). The property object exists for the whole
+     * device once one connector has it; a connector without it, such as an
+     * HDMI sink behind a DP++ adapter, keeps the NVKMS default.
      */
-    if ((connector->dev->mode_config.content_type_property != NULL) &&
+    if (to_nv_connector(connector)->has_content_type &&
         ((old_connector_state->content_type !=
           new_connector_state->content_type) ||
          drm_atomic_crtc_needs_modeset(crtc_state))) {
@@ -1261,6 +1263,8 @@ nv_drm_connector_new(struct drm_device *dev,
                 nv_dev,
                 "Failed to attach the content type property to connector created from physical index %u",
                 nv_connector->physicalIndex);
+        } else {
+            nv_connector->has_content_type = NV_TRUE;
         }
 
         if (nv_dev->nv_connector_hdmi_vsif_metadata_property) {

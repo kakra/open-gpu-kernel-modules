@@ -54,6 +54,9 @@ struct nv_drm_connector {
     NvBool internal;
     NvKmsConnectorType type;
 
+    /* The "content type" property is attached to this connector. */
+    NvBool has_content_type;
+
     char dpAddress[NVKMS_DP_ADDRESS_STRING_LENGTH];
 
     struct nv_drm_encoder *nv_detected_encoder;
