@@ -4692,6 +4692,11 @@ static NvBool MstI2cTransfer(struct NvKmsKapiDevice *device,
         // Like connector detection, wait outside both NVKMS and PM locks.
         // Only handles/tokens cross this boundary, never DP object pointers.
         nvkms_usleep(1000);
+        // A caller in i2c-dev must not hold up a signal or the freezer for
+        // the rest of the 5 s; give up and cancel the request instead.
+        if (nvkms_wait_interrupted()) {
+            break;
+        }
         if (!nvkms_ioctl_from_kapi(device->pKmsOpen,
                 NVKMS_IOCTL_MST_I2C_TRANSFER, &params, sizeof(params))) {
             break;

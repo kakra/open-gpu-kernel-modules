@@ -29,6 +29,7 @@
 #include <linux/vmalloc.h>
 #include <asm/div64.h> /* do_div() */
 #include <linux/sched.h>
+#include <linux/sched/signal.h>
 #include <linux/wait.h>
 #include <linux/random.h>
 #include <linux/file.h>
@@ -760,6 +761,11 @@ void nvkms_usleep(NvU64 usec)
          */
         msleep(msec);
     }
+}
+
+NvBool nvkms_wait_interrupted(void)
+{
+    return signal_pending(current) || freezing(current);
 }
 
 NvU64 nvkms_get_usec(void)

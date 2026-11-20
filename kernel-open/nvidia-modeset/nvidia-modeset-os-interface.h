@@ -155,6 +155,11 @@ size_t nvkms_strlen     (const char *s);
 int    nvkms_strcmp     (const char *s1,
                          const char *s2);
 void   nvkms_usleep     (NvU64 usec);
+/*
+ * Whether the calling task should stop waiting: a signal is pending or the
+ * task is being frozen for suspend or hibernation.
+ */
+NvBool nvkms_wait_interrupted(void);
 NvU64  nvkms_get_usec   (void);
 int    nvkms_copyin     (void *kptr,
                          NvU64 uaddr,
