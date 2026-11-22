@@ -3330,6 +3330,40 @@ nvidia_isr_msix_kthread_bh(
     return ret;
 }
 
+/*
+ * Stop interrupts from a GPU that is marked inaccessible but may still raise
+ * them: nothing services them any more, and releasing the GPU lock unmasks
+ * them at the GPU. They stay off until the IRQs are freed.
+ */
+static void
+nv_quiesce_irqs(
+    nv_linux_state_t *nvl
+)
+{
+    nv_state_t *nv = NV_STATE_PTR(nvl);
+
+    if (nv->flags & NV_FLAG_SOC_DISPLAY)
+        return;
+
+#if defined(NV_LINUX_PCIE_MSI_SUPPORTED)
+    if (nv->flags & NV_FLAG_USES_MSIX)
+    {
+        NvU32 i;
+
+        for (i = 0; i < nvl->num_intr; i++)
+            disable_irq_nosync(nvl->msix_entries[i].vector);
+        return;
+    }
+#endif
+
+    if (nv->flags & NV_FLAG_USES_MSI)
+        disable_irq_nosync(nv->interrupt_line);
+#ifdef CONFIG_PCI
+    else if (nvl->pci_dev != NULL)
+        pci_intx(nvl->pci_dev, 0); /* the line can be shared */
+#endif
+}
+
 static irqreturn_t
 nvidia_isr_common_bh(
     void *data
@@ -3343,12 +3377,15 @@ nvidia_isr_common_bh(
     status = nv_check_gpu_state(nv);
     if (status == NV_ERR_GPU_IS_LOST)
     {
-        nv_printf(NV_DBG_INFO, "NVRM: GPU is lost, skipping ISR bottom half\n");
+        nv_printf(NV_DBG_INFO, "NVRM: GPU is lost, not servicing its interrupts\n");
+        nv_quiesce_irqs(nvl);
     }
-    else
-    {
-        rm_isr_bh(sp, nv);
-    }
+
+    /*
+     * Always run this: the top half handed the GPU lock over to it. It doesn't
+     * service a GPU that is inaccessible, it only releases the lock then.
+     */
+    rm_isr_bh(sp, nv);
 
     return IRQ_HANDLED;
 }

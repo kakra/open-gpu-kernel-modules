@@ -659,7 +659,11 @@ static void RmIsrBottomHalf(
         // TODO : with multi interrupt handling based on irq aux interrupts are serviced by dpAuxService
         // See JIRA task TDS-4253.
         //
-        if (pGpu->getProperty(pGpu, PDB_PROP_GPU_TEGRA_SOC_NVDISPLAY))
+        if (NV_IS_DEVICE_INACCESSIBLE(nv))
+        {
+            // Nothing to service, but the GPU lock must still be released below
+        }
+        else if (pGpu->getProperty(pGpu, PDB_PROP_GPU_TEGRA_SOC_NVDISPLAY))
         {
             if (nv_get_current_irq_type(nv) == NV_SOC_IRQ_DISPLAY_TYPE)
             {
