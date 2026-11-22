@@ -592,20 +592,29 @@ memdescDestroy
     MEMORY_DESCRIPTOR *pMemDesc
 )
 {
-    // Allow null frees
-    if (!pMemDesc)
+    MEMORY_DESCRIPTOR *pParent;
+
+    //
+    // A submemory descriptor holds a reference on its parent, and each partial
+    // unmap of a mapping adds a level. Walk up the chain instead of recursing,
+    // it can be long enough to overflow the kernel stack.
+    //
+    // Null frees are allowed.
+    //
+    for (; pMemDesc != NULL; pMemDesc = pParent)
     {
-        return;
-    }
-
-    memdescRemoveRef(pMemDesc);
-
-    // if still more references are there for pMemDesc (pMemDesc->RefCount != 0), then bail out.
-
-    if (pMemDesc->RefCount == 0)
-    {
-        MEM_DESC_DESTROY_CALLBACK *pCb = memdescGetDestroyCallbackList(pMemDesc);
+        MEM_DESC_DESTROY_CALLBACK *pCb;
         MEM_DESC_DESTROY_CALLBACK *pNext;
+
+        memdescRemoveRef(pMemDesc);
+
+        // if still more references are there for pMemDesc (pMemDesc->RefCount != 0), then bail out.
+        if (pMemDesc->RefCount != 0)
+        {
+            break;
+        }
+
+        pCb = memdescGetDestroyCallbackList(pMemDesc);
 
         // Notify all interested parties of destruction
         while (pCb)
@@ -667,11 +676,11 @@ memdescDestroy
             pMemDesc->pPteEgmMappings = NULL;
         }
 
-        if (pMemDesc->_pParentDescriptor)
+        pParent = pMemDesc->_pParentDescriptor;
+        if (pParent != NULL)
         {
             if ((pMemDesc->_flags & MEMDESC_FLAGS_PRE_ALLOCATED) == 0)
-                pMemDesc->_pParentDescriptor->childDescriptorCnt--;
-            memdescDestroy(pMemDesc->_pParentDescriptor);
+                pParent->childDescriptorCnt--;
             pMemDesc->_pParentDescriptor = NULL;
         }
 
