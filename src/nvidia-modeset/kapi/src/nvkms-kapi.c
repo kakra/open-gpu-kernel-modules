@@ -698,6 +698,10 @@ static size_t KmsFlipParamsSize(void)
 
 static void FreeDevice(struct NvKmsKapiDevice *device)
 {
+    if (device == NULL) {
+        return;
+    }
+
     /* Free NVKMS objects allocated for NvKmsKapiDevice */
 
     KmsFreeDevice(device);
@@ -708,7 +712,9 @@ static void FreeDevice(struct NvKmsKapiDevice *device)
 
     /* Lower the reference count of gpu. */
 
-    nvkms_close_gpu(device->gpuId, NV_TRUE /* reset_aware */);
+    if (device->gpuOpened) {
+        nvkms_close_gpu(device->gpuId, NV_TRUE /* reset_aware */);
+    }
 
     if (device->pSema != NULL) {
         nvkms_sema_free(device->pSema);
@@ -1039,6 +1045,7 @@ static struct NvKmsKapiDevice* AllocateDevice
     }
 
     device->gpuId = params->gpuId;
+    device->gpuOpened = NV_TRUE;
     device->migDevice = params->migDevice;
 
     nvKmsKapiLogDebug(

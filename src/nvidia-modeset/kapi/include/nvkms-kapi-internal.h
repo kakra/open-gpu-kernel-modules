@@ -81,6 +81,7 @@ struct NvKmsKapiNisoSurface {
 struct NvKmsKapiDevice {
 
     NvU32 gpuId;
+    NvBool gpuOpened; /* gpuId can be 0, so it can't tell */
 
     nvkms_sema_handle_t *pSema;
 
