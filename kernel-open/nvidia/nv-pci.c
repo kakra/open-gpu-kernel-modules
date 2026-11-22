@@ -2605,6 +2605,58 @@ nv_pci_report_tdisp_error
                         dvsec0);
 }
 
+/*
+ * Whether config space is readable and wasn't reset: a reset clears the memory
+ * space and bus master enables, which are both set since probe.
+ */
+static NvBool
+nv_pci_config_intact
+(
+    struct pci_dev *pci_dev
+)
+{
+    const u16 enables = PCI_COMMAND_MEMORY | PCI_COMMAND_MASTER;
+    const u32 expected_id = (u32)pci_dev->vendor | ((u32)pci_dev->device << 16);
+    u32 id;
+    u16 command;
+
+    if ((pci_read_config_dword(pci_dev, PCI_VENDOR_ID, &id) != 0) ||
+        (id != expected_id))
+        return NV_FALSE;
+
+    if (pci_read_config_word(pci_dev, PCI_COMMAND, &command) != 0)
+        return NV_FALSE;
+
+    return (command & enables) == enables;
+}
+
+/*
+ * When recovery of a non-fatal error fails, e.g. because the audio function
+ * has no error handlers, the kernel reports a permanent failure to the whole
+ * subtree without resetting or disconnecting anything. It drops its runtime
+ * PM references first, so the GPU may be suspending; one that managed to
+ * suspend is working, and its config space can't be read in D3cold.
+ */
+static NvBool
+nv_pci_survived_failed_recovery
+(
+    struct pci_dev *pci_dev
+)
+{
+    struct device *dev = &pci_dev->dev;
+    NvBool survived;
+
+    if (pci_dev->error_state != pci_channel_io_normal)
+        return NV_FALSE;
+
+    pm_runtime_get_noresume(dev);
+    pm_runtime_barrier(dev);
+    survived = pm_runtime_suspended(dev) || nv_pci_config_intact(pci_dev);
+    pm_runtime_put(dev);
+
+    return survived;
+}
+
 static pci_ers_result_t
 nv_pci_error_detected
 (
@@ -2619,17 +2671,33 @@ nv_pci_error_detected
     //
     nv_linux_state_t *nvl = pci_get_drvdata(pci_dev);
     nv_state_t *nv;
+    NvBool was_intact;
 
     if ((nvl == NULL) || (nvl->pci_dev != pci_dev))
         return PCI_ERS_RESULT_DISCONNECT;
 
     nv = NV_STATE_PTR(nvl);
 
+    was_intact = nvl->pcie_nonfatal_intact;
+    nvl->pcie_nonfatal_intact = NV_FALSE;
+
     if (state == pci_channel_io_normal)
     {
+        /* The kernel holds the device resumed while it reports this */
+        nvl->pcie_nonfatal_intact = nv_pci_config_intact(pci_dev);
         NV_DEV_PRINTF(NV_DBG_INFO, nv,
                       "Nonfatal PCIe error detected; continuing recovery\n");
         return PCI_ERS_RESULT_CAN_RECOVER;
+    }
+
+    if ((state == pci_channel_io_perm_failure) && was_intact &&
+        !NV_IS_DEVICE_INACCESSIBLE(nv) &&
+        nv_pci_survived_failed_recovery(pci_dev))
+    {
+        NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
+                      "Recovery from a nonfatal PCIe error failed without a reset; GPU is still usable\n");
+        /* The kernel ignores the result of this call */
+        return PCI_ERS_RESULT_NONE;
     }
 
     //
@@ -2716,6 +2784,13 @@ nv_pci_slot_reset
         return PCI_ERS_RESULT_DISCONNECT;
 
     nv = NV_STATE_PTR(nvl);
+
+    /*
+     * The link was reset, so the GPU is lost. After a non-fatal error that
+     * another device wanted a reset for, error_detected() didn't mark it.
+     */
+    nvl->pcie_nonfatal_intact = NV_FALSE;
+    nv->flags |= NV_FLAG_IN_PCIE_ERROR_RECOVERY;
 
     expected_id = (u32)pci_dev->vendor | ((u32)pci_dev->device << 16);
     if (pci_bus_read_config_dword(pci_dev->bus, pci_dev->devfn,
