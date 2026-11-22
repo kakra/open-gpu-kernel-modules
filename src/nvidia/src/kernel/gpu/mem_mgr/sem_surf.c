@@ -1577,8 +1577,12 @@ _semsurfAddWaiter
                           "Notification handle already registered at index %"
                           NvU64_fmtu " for wait value %" NvU64_fmtu ".\n",
                           hClient, hSemaphoreSurf, index, waitValue);
-                /* Back out the auto-update value applied above, if any */
-                pValueListeners->newValue = 0;
+                /*
+                 * Back out the auto-update value applied above, if any. Without
+                 * one, a value that is set belongs to another waiter.
+                 */
+                if (newValue != 0)
+                    pValueListeners->newValue = 0;
                 rmStatus = NV_ERR_STATE_IN_USE;
                 goto cleanupValueListener;
             }
@@ -1610,6 +1614,9 @@ _semsurfAddWaiter
                       "listener at index %" NvU64_fmtu ", value %" NvU64_fmtu
                       ".  Status: 0x%08x\n",
                       hClient, hSemaphoreSurf, index, waitValue, rmStatus);
+            /* Back out the auto-update value applied above, if any */
+            if (newValue != 0)
+                pValueListeners->newValue = 0;
             goto cleanupValueListener;
         }
     }
@@ -1629,7 +1636,9 @@ _semsurfAddWaiter
     return rmStatus;
 
 cleanupValueListener:
-    if (!pValueListeners->pListeners)
+    /* The node may be another waiter's, which can be only an auto-update */
+    if (!pValueListeners->pListeners &&
+        (pValueListeners->newValue == 0))
     {
         listRemove(&pIndexListeners->listeners, pValueListeners);
         portMemFree(pValueListeners);
