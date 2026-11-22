@@ -53,7 +53,7 @@ void nvKmsKapiFreeNisoSurface(struct NvKmsKapiDevice *device,
                 "NVKMS_IOCTL_UNREGISTER_SURFACE failed");
         }
 
-        device->notifier.hKmsHandle = 0;
+        surface->hKmsHandle = 0;
     }
 
     if (surface->mapped) {
@@ -72,7 +72,7 @@ void nvKmsKapiFreeNisoSurface(struct NvKmsKapiDevice *device,
                 status);
         }
 
-        device->notifier.mapped = NV_FALSE;
+        surface->mapped = NV_FALSE;
     }
 
     if (surface->hRmHandle != 0) {
