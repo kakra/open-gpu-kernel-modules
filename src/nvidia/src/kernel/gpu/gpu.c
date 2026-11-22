@@ -7806,6 +7806,18 @@ gpuLogOobXidMessage_KERNEL
         return;
     }
 
+    //
+    // The RPC is synchronous and only copies the Xid to OOB. Don't poll for it
+    // where we can't sleep (e.g. the 1 Hz RC timer softirq), nor from within
+    // another RPC's poll, whose message buffer it would overwrite. The Xid is
+    // still logged to the OS by the caller.
+    //
+    if (osIsRaisedIRQL() ||
+        ((pKernelGsp != NULL) && pKernelGsp->bPollingForRpcResponse))
+    {
+        return;
+    }
+
     // Copy the message into the RPC params, truncated to max RPC size, but
     // always include a tailing NULL terminator.
     len = NV_MIN(len, NV2080_INTERNAL_OOB_XID_MESSAGE_BUFFER_SIZE - 1);
