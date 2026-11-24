@@ -239,6 +239,7 @@ static int nv_hwmon_get(nv_linux_state_t *nvl, nv_hwmon_sensor_t sensor, long *v
 out:
     while ((readings[sensor].timestamp == 0) && (retries++ < NV_HWMON_WRITE_RETRIES))
     {
+        os_fix_hit_event(NV_FIX_HIT_HWMON_READ_RETRY, 0);
         usleep_range(NV_HWMON_WRITE_RETRY_MIN_US, NV_HWMON_WRITE_RETRY_MAX_US);
 
         rc = nv_hwmon_snapshot(nvl, readings, &heartbeat);

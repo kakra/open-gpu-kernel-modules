@@ -3385,6 +3385,7 @@ nvidia_isr_common_bh(
     {
         nv_printf(NV_DBG_INFO, "NVRM: GPU is lost, not servicing its interrupts\n");
         nv_quiesce_irqs(nvl);
+        os_fix_hit_event(NV_FIX_HIT_ISR_BH_INACCESSIBLE, 0);
     }
 
     /*

@@ -38,6 +38,7 @@
 #include "class/cl0005.h"
 #include "class/cl003e.h" // NV01_MEMORY_SYSTEM
 #include "class/cl0040.h" // NV01_MEMORY_LOCAL_USER
+#include "nv-fix-hits.h"
 
 static void
 _semsurfUnregisterCallback
@@ -1583,6 +1584,8 @@ _semsurfAddWaiter
                  */
                 if (newValue != 0)
                     pValueListeners->newValue = 0;
+                else if (pValueListeners->newValue != 0)
+                    os_fix_hit_event(NV_FIX_HIT_SEMSURF_WAITER_KEPT, 0);
                 rmStatus = NV_ERR_STATE_IN_USE;
                 goto cleanupValueListener;
             }
@@ -1642,6 +1645,11 @@ cleanupValueListener:
     {
         listRemove(&pIndexListeners->listeners, pValueListeners);
         portMemFree(pValueListeners);
+    }
+    else if (!pValueListeners->pListeners)
+    {
+        // Kept: an update-only node of another waiter
+        os_fix_hit_event(NV_FIX_HIT_SEMSURF_WAITER_KEPT, 0);
     }
 
 cleanupIndexListener:

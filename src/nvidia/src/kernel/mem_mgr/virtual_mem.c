@@ -39,6 +39,7 @@
 #include "mem_mgr/gpu_vaspace.h"
 #include "kernel/rmapi/mapping_list.h"
 #include "nv-vram-pressure.h"
+#include "nv-fix-hits.h"
 
 #include "class/cl0070.h" // NV01_MEMORY_VIRTUAL
 #include "class/cl50a0.h" // NV50_MEMORY_VIRTUAL
@@ -633,6 +634,7 @@ _virtmemFreeLeftoverDmaMappings
             NV_PRINTF(LEVEL_ERROR,
                       "Freeing leftover DMA mapping [0x%llX, 0x%llX) of a destroyed VirtualMemory.\n",
                       dmaOffset, dmaOffset + pDmaMappingInfo->pMemDesc->Size);
+            os_fix_hit_event(NV_FIX_HIT_DMA_LEFTOVER_FREED, pDmaMappingInfo->pMemDesc->Size);
 
             //
             // Kernel and P2P mappings are never split, but they can still be
@@ -1731,6 +1733,7 @@ virtmemUnmapFrom_IMPL
     if ((pDmaMappingInfo != NULL) &&
         _virtmemDmaMappingIsForeign(pDmaMappingInfo, pSrcMemoryRef))
     {
+        os_fix_hit_event(NV_FIX_HIT_DMA_UNMAP_FOREIGN_SKIPPED, pParams->size);
         pDmaMappingInfo = NULL;
     }
 
@@ -1795,6 +1798,8 @@ virtmemUnmapFrom_IMPL
 
             dmaOffset = pDmaMappingInfo->DmaOffset;
             unmapSize = NV_MIN(unmapEnd, mappedHi) - dmaOffset;
+
+            os_fix_hit_event(NV_FIX_HIT_DMA_UNMAP_HOLE_REMAINDER, unmapSize);
         }
         else
         {

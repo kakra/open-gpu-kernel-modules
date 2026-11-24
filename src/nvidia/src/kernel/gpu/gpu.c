@@ -124,6 +124,7 @@ static NV_STATUS gpuDetermineVirtualMode(OBJGPU *);
 #include "g_odb.h"
 
 #include "kernel/gpu/oob/kernel_oob.h"
+#include "nv-fix-hits.h"
 
 #define  RMTRACE_ENGINE_PROFILE_EVENT(EventName, EngineId, ReadCount, WriteCount)           \
 {                                                                                           \
@@ -7815,6 +7816,7 @@ gpuLogOobXidMessage_KERNEL
     if (osIsRaisedIRQL() ||
         ((pKernelGsp != NULL) && pKernelGsp->bPollingForRpcResponse))
     {
+        os_fix_hit_event(NV_FIX_HIT_OOB_XID_RPC_SKIPPED, 0);
         return;
     }
 

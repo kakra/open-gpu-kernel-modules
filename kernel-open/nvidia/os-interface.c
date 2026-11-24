@@ -1515,6 +1515,39 @@ void NV_API_CALL os_vram_pressure_get(NvU32 event, NvU64 *count, NvU64 *bytes,
     *last_ns = atomic64_read(&nv_vram_pressure_last_ns[event]);
 }
 
+/*
+ * Fix hit counters (nv-fix-hits.h), read by /proc/driver/nvidia/fix_hits.
+ * Updated without locks like the video memory pressure counters above; the
+ * paths are rare, so plain atomics are cheap enough.
+ */
+static atomic64_t nv_fix_hit_count[NV_FIX_HIT_EVENT_COUNT];
+static atomic64_t nv_fix_hit_bytes[NV_FIX_HIT_EVENT_COUNT];
+static atomic64_t nv_fix_hit_last_ns[NV_FIX_HIT_EVENT_COUNT];
+
+void NV_API_CALL os_fix_hit_event(NvU32 event, NvU64 bytes)
+{
+    if (event >= NV_FIX_HIT_EVENT_COUNT)
+        return;
+
+    atomic64_inc(&nv_fix_hit_count[event]);
+    atomic64_add(bytes, &nv_fix_hit_bytes[event]);
+    atomic64_set(&nv_fix_hit_last_ns[event], ktime_get_ns());
+}
+
+void NV_API_CALL os_fix_hit_get(NvU32 event, NvU64 *count, NvU64 *bytes,
+                                NvU64 *last_ns)
+{
+    if (event >= NV_FIX_HIT_EVENT_COUNT)
+    {
+        *count = *bytes = *last_ns = 0;
+        return;
+    }
+
+    *count   = atomic64_read(&nv_fix_hit_count[event]);
+    *bytes   = atomic64_read(&nv_fix_hit_bytes[event]);
+    *last_ns = atomic64_read(&nv_fix_hit_last_ns[event]);
+}
+
 typedef struct os_spinlock_s
 {
     nv_spinlock_t      lock;

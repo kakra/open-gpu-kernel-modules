@@ -286,6 +286,46 @@ nv_procfs_read_vram_pressure(
 
 NV_DEFINE_SINGLE_PROCFS_FILE_READ_ONLY_WITHOUT_LOCK(vram_pressure);
 
+/*
+ * Diagnostic: how often fixes of the ogkm series took the path that the
+ * unpatched driver got wrong (nv-fix-hits.h). Same format as vram_pressure.
+ */
+static const char * const nv_fix_hit_names[NV_FIX_HIT_EVENT_COUNT] =
+{
+    [NV_FIX_HIT_DMA_UNMAP_HOLE_REMAINDER]  = "dma_unmap_hole_remainder",
+    [NV_FIX_HIT_DMA_UNMAP_FOREIGN_SKIPPED] = "dma_unmap_foreign_skipped",
+    [NV_FIX_HIT_DMA_LEFTOVER_FREED]        = "dma_leftover_freed",
+    [NV_FIX_HIT_SEMSURF_WAITER_KEPT]       = "semsurf_waiter_kept",
+    [NV_FIX_HIT_OOB_XID_RPC_SKIPPED]       = "oob_xid_rpc_skipped",
+    [NV_FIX_HIT_ISR_BH_INACCESSIBLE]       = "isr_bh_inaccessible",
+    [NV_FIX_HIT_AER_RECOVERY_SURVIVED]     = "aer_recovery_survived",
+    [NV_FIX_HIT_HWMON_READ_RETRY]          = "hwmon_read_retry",
+};
+
+static int
+nv_procfs_read_fix_hits(
+    struct seq_file *s,
+    void *v
+)
+{
+    NvU32 i;
+
+    seq_printf(s, "# fix count bytes last_ns now_ns=%llu\n", ktime_get_ns());
+
+    for (i = 0; i < NV_FIX_HIT_EVENT_COUNT; i++)
+    {
+        NvU64 count, bytes, last_ns;
+
+        os_fix_hit_get(i, &count, &bytes, &last_ns);
+        seq_printf(s, "%s %llu %llu %llu\n", nv_fix_hit_names[i],
+                   count, bytes, last_ns);
+    }
+
+    return 0;
+}
+
+NV_DEFINE_SINGLE_PROCFS_FILE_READ_ONLY_WITHOUT_LOCK(fix_hits);
+
 static void
 nv_procfs_close_file(
     nv_procfs_private_t *nvpp
@@ -1467,6 +1507,10 @@ int nv_procfs_init(void)
         goto failed;
 
     entry = NV_CREATE_PROC_FILE("vram_pressure", proc_nvidia, vram_pressure, NULL);
+    if (!entry)
+        goto failed;
+
+    entry = NV_CREATE_PROC_FILE("fix_hits", proc_nvidia, fix_hits, NULL);
     if (!entry)
         goto failed;
 

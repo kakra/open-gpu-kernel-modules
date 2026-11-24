@@ -2696,6 +2696,7 @@ nv_pci_error_detected
     {
         NV_DEV_PRINTF(NV_DBG_ERRORS, nv,
                       "Recovery from a nonfatal PCIe error failed without a reset; GPU is still usable\n");
+        os_fix_hit_event(NV_FIX_HIT_AER_RECOVERY_SURVIVED, 0);
         /* The kernel ignores the result of this call */
         return PCI_ERS_RESULT_NONE;
     }
