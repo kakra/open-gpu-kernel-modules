@@ -3460,6 +3460,15 @@ void ConnectorImpl::fireEventsInternal()
             dev->address.toNvU32Buffer(addrBuffer);
             NV_DPTRACE_WARNING(LOST_DEVICE, dev->address.size(), addrBuffer[0], addrBuffer[1],
                                    addrBuffer[2], addrBuffer[3]);
+            //
+            // An SST sink that goes away while the link is kept alive never
+            // gets nvDisableVrr() to clear its Adaptive-Sync request, see
+            // train().
+            //
+            if (!dev->multistream)
+            {
+                hal->clearIgnoreMSATimingParamtersRequested();
+            }
             sink->lostDevice(dev);
             removeLostDeviceFromGroups(dev);
             // Remove device from dscEnabledDevices list before deletion to prevent dangling pointer
@@ -3593,6 +3602,10 @@ void ConnectorImpl::fireEventsInternal()
                     // If yes, then we need to report this lost device first.
                     _device->shadow.plugged = false;
                     DP_PRINTF(DP_WARNING, "DPCONN> Lost device %p", _device);
+                    if (!_device->multistream)
+                    {
+                        hal->clearIgnoreMSATimingParamtersRequested();
+                    }
                     sink->lostDevice(_device);
                     DP_ASSERT(!_device->activeGroup && "DD didn't remove panel from group");
                     delete _device;
@@ -7518,6 +7531,35 @@ bool ConnectorImpl::train(const LinkConfiguration & lConfig, bool force,
     {
         // update PSR link cache on successful LT
         this->psrLinkConfig = activeLinkConfig;
+    }
+
+    //
+    // Link training rewrites DOWNSPREAD_CTRL (DPCD 0x107) and clears
+    // MSA_TIMING_PAR_IGNORE_EN.  When a link is retrained outside of a
+    // modeset (e.g. assessLink() from notifyLongPulseHotplugSST() after the
+    // sink wakes from a low power state, or a link-loss retrain), nothing
+    // re-enables Adaptive-Sync afterwards, so the sink stays in fixed-timing
+    // mode and loses sync as soon as VRR varies the refresh rate.  Restore
+    // the bit if Adaptive-Sync was requested for this SST sink.
+    //
+    if (result && (lConfig.lanes != 0) && !lConfig.multistream &&
+        hal->getIgnoreMSATimingParamtersRequested())
+    {
+        hal->setIgnoreMSATimingParamters(true);
+    }
+
+    //
+    // The request lives in the connector's HAL, which outlives the sink, and
+    // only nvDisableVrr() clears it, through the devices still in the group.
+    // Forget it when the link is powered down, so a sink trained later on
+    // this connector doesn't get the bit before Adaptive-Sync is enabled for
+    // it. A failed training leaves lConfig.lanes alone, so this only matches
+    // an explicit power down. Any later stream needs a modeset, and that
+    // enables Adaptive-Sync again after training.
+    //
+    if (lConfig.lanes == 0)
+    {
+        hal->clearIgnoreMSATimingParamtersRequested();
     }
 
     //
