@@ -1041,6 +1041,11 @@ NvS32  NV_API_CALL  nv_stop_rc_timer             (nv_state_t *);
 
 void   NV_API_CALL  nv_post_event                (nv_event_t *, NvHandle, NvU32, NvU32, NvU16, NvBool);
 NvS32  NV_API_CALL  nv_get_event                 (nv_file_private_t *, nv_event_t *, NvU32 *);
+void*  NV_API_CALL  nv_event_broadcast_create    (void);
+void   NV_API_CALL  nv_event_broadcast_put       (void *);
+void   NV_API_CALL  nv_event_broadcast_signal    (void *);
+void*  NV_API_CALL  nv_event_broadcast_subscribe (void *, nv_file_private_t *);
+void   NV_API_CALL  nv_event_broadcast_unsubscribe (void *);
 
 void*  NV_API_CALL  nv_i2c_add_adapter           (nv_state_t *, NvU32);
 void   NV_API_CALL  nv_i2c_del_adapter           (nv_state_t *, void *);

@@ -61,6 +61,9 @@ typedef struct
     // this event, decremented for each notification sent (not under spinlock).
     //
     PORT_ATOMIC NvS32 pendingNotifyCount;
+
+    // Broadcast subscription of a node on broadcastList, else NULL
+    void *pBroadcastSub;
 } ENGINE_EVENT_NOTIFICATION;
 
 //
@@ -79,6 +82,17 @@ struct GpuEngineEventNotificationList
 
     // List insertion and removal happens under pSpinlock
     EngineEventNotificationList eventNotificationList;
+
+    //
+    // Dataless OS events don't get a post each from the ISR, which made its
+    // cost linear in their number (one per Vulkan timeline semaphore): one
+    // signal of pBroadcast covers all of them, see
+    // nv_event_broadcast_subscribe(). They stay on broadcastList (under
+    // pSpinlock) for notifications targeted at one event. pBroadcast is NULL
+    // if it couldn't be allocated.
+    //
+    void *pBroadcast;
+    EngineEventNotificationList broadcastList;
 
     // Filled while pSpinlock is held, drained outside of the lock in ISR
     PendingEventNotifyList pendingEventNotifyList;
@@ -140,7 +154,10 @@ NV_STATUS gpuEngineEventNotificationListCreate
     });
 
     listInitIntrusive(&pEventNotificationList->eventNotificationList);
+    listInitIntrusive(&pEventNotificationList->broadcastList);
     listInitIntrusive(&pEventNotificationList->pendingEventNotifyList);
+
+    pEventNotificationList->pBroadcast = osEventBroadcastCreate();
 
     pEventNotificationList->activeNotifyThreads = 0;
 
@@ -168,6 +185,12 @@ void gpuEngineEventNotificationListDestroy
 
     NV_ASSERT(listCount(&pEventNotificationList->eventNotificationList) == 0);
     listDestroy(&pEventNotificationList->eventNotificationList);
+
+    NV_ASSERT(listCount(&pEventNotificationList->broadcastList) == 0);
+    listDestroy(&pEventNotificationList->broadcastList);
+
+    if (pEventNotificationList->pBroadcast != NULL)
+        osEventBroadcastDestroy(pEventNotificationList->pBroadcast);
 
     if (pEventNotificationList->pSpinlock != NULL)
         portSyncSpinlockDestroy(pEventNotificationList->pSpinlock);
@@ -236,10 +259,26 @@ static NV_STATUS _gpuEngineEventNotificationInsert
     pEngineEventNotification->pEventNotify = pEventNotify;
     pEngineEventNotification->pMemory = pMemory;
 
+    //
+    // A dataless OS event only marks its file readable. Per-vGPU semaphore
+    // events are checked one by one in the ISR and keep individual posts.
+    //
+    if ((pEventNotificationList->pBroadcast != NULL) &&
+        (pMemory == NULL) &&
+        (pEventNotify->NotifyType == NV01_EVENT_OS_EVENT) &&
+        !pEventNotify->bEventDataRequired)
+    {
+        pEngineEventNotification->pBroadcastSub =
+            osEventBroadcastSubscribe(pEventNotificationList->pBroadcast,
+                                      pEventNotify->Data);
+    }
+
     // Take the lock to add the node to the list
     _gpuEngineEventNotificationListLockPreemptible(pEventNotificationList);
     {
-        listPrependExisting(&pEventNotificationList->eventNotificationList,
+        listPrependExisting((pEngineEventNotification->pBroadcastSub != NULL) ?
+                                &pEventNotificationList->broadcastList :
+                                &pEventNotificationList->eventNotificationList,
                             pEngineEventNotification);
     }
     _gpuEngineEventNotificationListUnlockPreemptible(pEventNotificationList);
@@ -254,18 +293,22 @@ static void _gpuEngineEventNotificationRemove
 )
 {
     ENGINE_EVENT_NOTIFICATION *pEngineEventNotification = NULL;
+    EngineEventNotificationList *lists[] = {
+        &pEventNotificationList->eventNotificationList,
+        &pEventNotificationList->broadcastList,
+    };
+    NvU32 i;
 
     _gpuEngineEventNotificationListLockPreemptible(pEventNotificationList);
+    for (i = 0; (i < NV_ARRAY_ELEMENTS(lists)) && (pEngineEventNotification == NULL); i++)
     {
-        EngineEventNotificationListIter it =
-            listIterAll(&pEventNotificationList->eventNotificationList);
+        EngineEventNotificationListIter it = listIterAll(lists[i]);
         while (listIterNext(&it))
         {
             if (it.pValue->pEventNotify == pEventNotify)
             {
                 pEngineEventNotification = it.pValue;
-                listRemove(&pEventNotificationList->eventNotificationList,
-                           pEngineEventNotification);
+                listRemove(lists[i], pEngineEventNotification);
                 break;
             }
         }
@@ -273,6 +316,11 @@ static void _gpuEngineEventNotificationRemove
     _gpuEngineEventNotificationListUnlockPreemptible(pEventNotificationList);
 
     NV_ASSERT(pEngineEventNotification != NULL);
+    if ((pEngineEventNotification != NULL) &&
+        (pEngineEventNotification->pBroadcastSub != NULL))
+    {
+        osEventBroadcastUnsubscribe(pEngineEventNotification->pBroadcastSub);
+    }
     portMemFree(pEngineEventNotification);
 }
 
@@ -287,6 +335,10 @@ static NV_STATUS _gpuEngineEventNotificationListNotify
     PendingEventNotifyList *pPending =
         &pEventNotificationList->pendingEventNotifyList;
     ENGINE_EVENT_NOTIFICATION *pIter, *pTail;
+
+    // One signal covers all broadcast events, see broadcastList
+    if ((hEvent == 0) && (pEventNotificationList->pBroadcast != NULL))
+        osEventBroadcastSignal(pEventNotificationList->pBroadcast);
 
     //
     // Acquire engine list spinlock before traversing the list. Note that this
@@ -364,6 +416,26 @@ static NV_STATUS _gpuEngineEventNotificationListNotify
             {
                 pEngineEventNotification->bInPendingNotifyList = NV_TRUE;
                 listAppendExisting(pPending, pEngineEventNotification);
+            }
+        }
+
+        // A notification targeted at a broadcast event posts it individually
+        if (hEvent != 0)
+        {
+            EngineEventNotificationListIter bit =
+                listIterAll(&pEventNotificationList->broadcastList);
+            while (listIterNext(&bit))
+            {
+                ENGINE_EVENT_NOTIFICATION *pEngineEventNotification = bit.pValue;
+                if (pEngineEventNotification->pEventNotify->hEvent != hEvent)
+                    continue;
+
+                portAtomicIncrementS32(&pEngineEventNotification->pendingNotifyCount);
+                if (!pEngineEventNotification->bInPendingNotifyList)
+                {
+                    pEngineEventNotification->bInPendingNotifyList = NV_TRUE;
+                    listAppendExisting(pPending, pEngineEventNotification);
+                }
             }
         }
 

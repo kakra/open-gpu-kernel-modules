@@ -1611,6 +1611,52 @@ NvU32 osSetEvent
     return 1;
 }
 
+//
+// Broadcast events for dataless OS events on the per-engine non-stall lists,
+// see nv_event_broadcast_subscribe().
+//
+void *osEventBroadcastCreate(void)
+{
+    return nv_event_broadcast_create();
+}
+
+void osEventBroadcastDestroy(void *pBroadcast)
+{
+    nv_event_broadcast_put(pBroadcast);
+}
+
+void osEventBroadcastSignal(void *pBroadcast)
+{
+    nv_event_broadcast_signal(pBroadcast);
+}
+
+//
+// Returns the subscription of the file the OS event posts to, or NULL if the
+// event must be posted individually.
+//
+void *osEventBroadcastSubscribe(void *pBroadcast, NvP64 osEvent)
+{
+    nv_event_t *event = NvP64_VALUE(osEvent);
+    nv_event_t eventSnapshot;
+    nv_file_private_t *nvfp = NULL;
+    void *pSub;
+
+    // Keeps the file alive, like a post; fails once the OS event was freed.
+    if (referenceEventForPost(event, NV_FALSE, &eventSnapshot, &nvfp) != NV_OK)
+        return NULL;
+
+    pSub = nv_event_broadcast_subscribe(pBroadcast, nvfp);
+
+    dereferenceEventForPost(NULL, NV_FALSE, nvfp);
+
+    return pSub;
+}
+
+void osEventBroadcastUnsubscribe(void *pSub)
+{
+    nv_event_broadcast_unsubscribe(pSub);
+}
+
 NV_STATUS osNotifyEvent(
     OBJGPU             *pGpu,
     PEVENTNOTIFICATION  NotifyEvent,

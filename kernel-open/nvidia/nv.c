@@ -1230,6 +1230,25 @@ static void *nv_alloc_file_private(void)
     return nvlfp;
 }
 
+/* See nv_event_broadcast_subscribe() */
+typedef struct nv_event_broadcast_s
+{
+    atomic64_t generation;
+    wait_queue_head_t waitqueue;
+    atomic_t refcount;
+} nv_event_broadcast_t;
+
+typedef struct nv_event_broadcast_sub_s
+{
+    struct nv_event_broadcast_sub_s *next;
+    nv_event_broadcast_t *broadcast;
+    atomic_t active;        /* RM events subscribed */
+    atomic_t refcount;      /* the file + one per RM event */
+    NvU64 seen;             /* generation last reported, under fp_lock */
+} nv_event_broadcast_sub_t;
+
+static void nv_event_broadcast_free_subs(nv_linux_file_private_t *nvlfp);
+
 static void nv_free_file_private(nv_linux_file_private_t *nvlfp)
 {
     nvidia_event_t *nvet;
@@ -1240,6 +1259,8 @@ static void nv_free_file_private(nv_linux_file_private_t *nvlfp)
     // Event teardown can race in-flight posts that still use nvfp.
     while (READ_ONCE(nvlfp->nvfp.event_posting_refcount) != 0)
         cond_resched();
+
+    nv_event_broadcast_free_subs(nvlfp);
 
     for (nvet = nvlfp->event_data_head; nvet != NULL; nvet = nvlfp->event_data_head)
     {
@@ -2591,6 +2612,7 @@ nvidia_poll(
     nv_linux_state_t *nvl;
     nv_state_t *nv;
     NV_STATUS status;
+    nv_event_broadcast_sub_t *subs, *sub;
 
     if (!nv_is_control_device(NV_FILE_INODE(file)))
     {
@@ -2618,12 +2640,41 @@ nvidia_poll(
     if ((file->f_flags & O_NONBLOCK) == 0)
         poll_wait(file, &nvlfp->waitqueue, wait);
 
+    /* Pairs with the smp_mb() in nv_event_broadcast_subscribe(). */
+    smp_mb();
+
+    subs = smp_load_acquire(&nvlfp->broadcast_subs);
+
+    if ((file->f_flags & O_NONBLOCK) == 0)
+    {
+        for (sub = subs; sub != NULL; sub = sub->next)
+            poll_wait(file, &sub->broadcast->waitqueue, wait);
+    }
+
+    /* Pairs with nv_event_broadcast_signal(). */
+    smp_mb();
+
     NV_SPIN_LOCK_IRQSAVE(&nvlfp->fp_lock, eflags);
 
     if ((nvlfp->event_data_head != NULL) || nvlfp->dataless_event_pending)
     {
         mask = (POLLPRI | POLLIN);
         nvlfp->dataless_event_pending = NV_FALSE;
+    }
+
+    for (sub = subs; sub != NULL; sub = sub->next)
+    {
+        NvU64 generation;
+
+        if (atomic_read(&sub->active) == 0)
+            continue;
+
+        generation = atomic64_read(&sub->broadcast->generation);
+        if (generation != sub->seen)
+        {
+            sub->seen = generation;
+            mask = (POLLPRI | POLLIN);
+        }
     }
 
     NV_SPIN_UNLOCK_IRQRESTORE(&nvlfp->fp_lock, eflags);
@@ -4455,6 +4506,178 @@ void NV_API_CALL nv_post_event(
     NV_SPIN_UNLOCK_IRQRESTORE(&nvlfp->fp_lock, eflags);
 
     wake_up_interruptible(&nvlfp->waitqueue);
+}
+
+/*
+ * Broadcast events
+ *
+ * Dataless OS events on a per-engine non-stall list only tell the file that
+ * the engine interrupted; nvidia_poll() reports that and clears it. Userspace
+ * may hold thousands of them (one per Vulkan timeline semaphore), and posting
+ * each one from every non-stall interrupt made the ISR cost linear in their
+ * number. Instead, the engine bumps one generation counter and wakes one wait
+ * queue, and nvidia_poll() compares the counter against the value the file
+ * last saw.
+ *
+ * A file has at most one subscription per broadcast, shared by all of its RM
+ * events on that engine. The subscription holds a reference on the broadcast
+ * and lives until both the file is freed and the last RM event using it is
+ * unsubscribed, so neither a poll() wait queue entry nor RM outlives the
+ * broadcast.
+ */
+void* NV_API_CALL nv_event_broadcast_create(void)
+{
+    nv_event_broadcast_t *broadcast;
+
+    NV_KMALLOC(broadcast, sizeof(*broadcast));
+    if (broadcast == NULL)
+        return NULL;
+
+    atomic64_set(&broadcast->generation, 0);
+    init_waitqueue_head(&broadcast->waitqueue);
+    atomic_set(&broadcast->refcount, 1);
+
+    return broadcast;
+}
+
+void NV_API_CALL nv_event_broadcast_put(void *pBroadcast)
+{
+    nv_event_broadcast_t *broadcast = pBroadcast;
+
+    if (broadcast != NULL && atomic_dec_and_test(&broadcast->refcount))
+        NV_KFREE(broadcast, sizeof(*broadcast));
+}
+
+/* Any context, including the lockless ISR. */
+void NV_API_CALL nv_event_broadcast_signal(void *pBroadcast)
+{
+    nv_event_broadcast_t *broadcast = pBroadcast;
+
+    /* Fully ordered; pairs with the smp_mb() in nvidia_poll(). */
+    atomic64_inc_return(&broadcast->generation);
+
+    if (wq_has_sleeper(&broadcast->waitqueue))
+        wake_up_interruptible(&broadcast->waitqueue);
+}
+
+static void nv_event_broadcast_sub_put(nv_event_broadcast_sub_t *sub)
+{
+    if (atomic_dec_and_test(&sub->refcount))
+    {
+        nv_event_broadcast_put(sub->broadcast);
+        NV_KFREE(sub, sizeof(*sub));
+    }
+}
+
+/*
+ * The caller keeps nvfp alive (an event posting reference) for the duration
+ * of the call. Returns NULL if the event can't use the broadcast; the caller
+ * then posts it individually as before.
+ *
+ * epoll queues its wait entries only on the first poll of a file, so a file
+ * already waited on when its subscription is published might never wait on
+ * the broadcast queue. Such files keep individual posts. nvidia_poll() waits
+ * on nvlfp->waitqueue before it reads the subscription list, so either it
+ * sees the subscription or the check below sees its waiter.
+ */
+void* NV_API_CALL nv_event_broadcast_subscribe(
+    void              *pBroadcast,
+    nv_file_private_t *nvfp
+)
+{
+    nv_linux_file_private_t *nvlfp = nv_get_nvlfp_from_nvfp(nvfp);
+    nv_event_broadcast_t *broadcast = pBroadcast;
+    nv_event_broadcast_sub_t *sub, *new_sub;
+    unsigned long eflags;
+
+    if (NV_MAY_SLEEP())
+    {
+        NV_KMALLOC(new_sub, sizeof(*new_sub));
+    }
+    else
+    {
+        NV_KMALLOC_ATOMIC(new_sub, sizeof(*new_sub));
+    }
+    if (new_sub == NULL)
+        return NULL;
+
+    NV_SPIN_LOCK_IRQSAVE(&nvlfp->fp_lock, eflags);
+
+    for (sub = nvlfp->broadcast_subs; sub != NULL; sub = sub->next)
+    {
+        if (sub->broadcast == broadcast)
+            break;
+    }
+
+    if (sub != NULL)
+    {
+        if (waitqueue_active(&nvlfp->waitqueue))
+        {
+            sub = NULL;
+            goto unlock;
+        }
+
+        atomic_inc(&sub->refcount);
+        /* Interrupts from before the first live event don't count. */
+        if (atomic_inc_return(&sub->active) == 1)
+            sub->seen = atomic64_read(&broadcast->generation);
+    }
+    else
+    {
+        sub = new_sub;
+        new_sub = NULL;
+
+        atomic_inc(&broadcast->refcount);
+        sub->broadcast = broadcast;
+        atomic_set(&sub->active, 1);
+        atomic_set(&sub->refcount, 2);
+        sub->seen = atomic64_read(&broadcast->generation);
+        sub->next = nvlfp->broadcast_subs;
+
+        /* nvidia_poll() walks the list without fp_lock. */
+        smp_store_release(&nvlfp->broadcast_subs, sub);
+
+        smp_mb();
+        if (waitqueue_active(&nvlfp->waitqueue))
+        {
+            /* Stays on the list, inactive, until the file is freed. */
+            atomic_dec(&sub->active);
+            atomic_dec(&sub->refcount);
+            sub = NULL;
+        }
+    }
+
+unlock:
+    NV_SPIN_UNLOCK_IRQRESTORE(&nvlfp->fp_lock, eflags);
+
+    if (new_sub != NULL)
+        NV_KFREE(new_sub, sizeof(*new_sub));
+
+    return sub;
+}
+
+/*
+ * The file is going away: its OS events are inactive, so no subscribe can
+ * start, and the posting references are drained, so none is in flight.
+ */
+static void nv_event_broadcast_free_subs(nv_linux_file_private_t *nvlfp)
+{
+    nv_event_broadcast_sub_t *sub, *next;
+
+    for (sub = nvlfp->broadcast_subs; sub != NULL; sub = next)
+    {
+        next = sub->next;
+        nv_event_broadcast_sub_put(sub);
+    }
+    nvlfp->broadcast_subs = NULL;
+}
+
+void NV_API_CALL nv_event_broadcast_unsubscribe(void *pSub)
+{
+    nv_event_broadcast_sub_t *sub = pSub;
+
+    atomic_dec(&sub->active);
+    nv_event_broadcast_sub_put(sub);
 }
 
 NvBool NV_API_CALL nv_is_rm_firmware_active(

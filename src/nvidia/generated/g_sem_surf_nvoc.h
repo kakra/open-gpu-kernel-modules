@@ -83,15 +83,31 @@ MAKE_INTRUSIVE_MAP(SEM_INDEX_LISTENERS,
                    SEM_INDEX_LISTENERS_NODE,
                    node);
 
+struct SEM_DISPATCHER;
+struct SEM_SHARED_DATA;
+
 typedef struct {
     /*
-     * Internal client corresponding to channel's GPU
-     * Could be different from the one in SemaphoreSurface if the channel belongs to a different GPU/partition
+     * Shared non-stall interrupt callback for this node's (GPU, internal
+     * client, notify index). The internal client corresponds to the channel's
+     * GPU and could be different from the one in SemaphoreSurface if the
+     * channel belongs to a different GPU/partition.
      */
-    NvHandle hClient;
+    struct SEM_DISPATCHER *pDispatcher;
 
-    NvHandle hEvent;
+    /* Semaphore surface data this binding belongs to */
+    struct SEM_SHARED_DATA *pShared;
+
     NvU32 nUsers;
+
+    /*
+     * Protected by the dispatcher's spinlock. A node is armed (on the
+     * dispatcher's armed list) whenever pShared has listeners.
+     */
+    NvBool bArmed;
+    NvBool bPending;
+    ListNode armedEntry;
+    ListNode pendingEntry;
 
     MapNode node;
 } SEM_NOTIFIER_NODE;
@@ -100,7 +116,7 @@ MAKE_INTRUSIVE_MAP(SEM_NOTIFIER,
                    SEM_NOTIFIER_NODE,
                    node);
 
-typedef struct {
+typedef struct SEM_SHARED_DATA {
     PORT_SPINLOCK *pSpinlock;
 
     /* Internal interrupt handler callback data */
@@ -116,7 +132,6 @@ typedef struct {
     NvHandle hSemaphoreMem;
     NvHandle hMaxSubmittedMem;
     NvHandle *phEvents;
-    NVOS10_EVENT_KERNEL_CALLBACK_EX callback;
     NvU32 numEvents;
 
     /* The client-mappable semaphore memory region and associated data */
@@ -132,7 +147,11 @@ typedef struct {
     /* Client active CPU waiters list XXX Should be per (offset,value) pair */
     SEM_INDEX_LISTENERS listenerMap;
 
-    /* Map of registered interrupt callbacks by notifier index XXX Should be per (device instance, notifier index) */
+    /*
+     * Channel bindings by (GPU instance, notify index). Inserted and removed
+     * under pSpinlock, since the lockless waiter controls walk it to arm the
+     * bindings.
+     */
     SEM_NOTIFIER notifierMap;
 
     /* Number of semaphore surface objects sharing this data */

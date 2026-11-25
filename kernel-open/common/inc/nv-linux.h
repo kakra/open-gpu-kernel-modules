@@ -1541,6 +1541,12 @@ typedef struct
     NvBool dataless_event_pending;
     nv_spinlock_t fp_lock;
     wait_queue_head_t waitqueue;
+    /*
+     * Broadcast event subscriptions, see nv_event_broadcast_subscribe().
+     * Prepended under fp_lock, nothing is unlinked before the file private
+     * is freed, so nvidia_poll() may walk the list without the lock.
+     */
+    struct nv_event_broadcast_sub_s *broadcast_subs;
     nv_kthread_q_item_t deferred_close_q_item;
     NvU32 *attached_gpus;
     size_t num_attached_gpus;

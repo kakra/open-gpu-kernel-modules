@@ -29,6 +29,7 @@
 #include "gpu/mem_mgr/mem_desc.h"
 #include "gpu/fifo/kernel_channel.h"
 #include "gpu/gpu.h"
+#include "core/locks.h"
 #include "rmapi/client.h"
 #include "rmapi/rs_utils.h"
 #include "platform/sli/sli.h"
@@ -40,20 +41,412 @@
 #include "class/cl0040.h" // NV01_MEMORY_LOCAL_USER
 #include "nv-fix-hits.h"
 
+//
+// Non-stall interrupt dispatch
+//
+// Each (GPU, internal client, notify index) has one SEM_DISPATCHER owning a
+// single NV01_EVENT_KERNEL_CALLBACK_EX event that is shared by every
+// semaphore surface bound to a channel there. Previously each surface
+// allocated its own event, so every non-stall interrupt ran one callback per
+// live surface in the ISR, even for surfaces without waiters, and creating or
+// destroying a surface paid for an event alloc/free (a GSP RPC) plus linear
+// searches of the engine and subdevice event lists.
+//
+// The dispatcher only visits armed bindings. A binding is armed whenever its
+// surface has listeners: the waiter path arms before it lowers the monitored
+// fence, so an interrupt caused by that fence finds the binding, and a
+// binding is disarmed under the surface spinlock once listenerMap is empty.
+// Invariant: listenerMap non-empty => every binding in notifierMap is armed.
+//
+// Lock order: SEM_SHARED_DATA::pSpinlock -> SEM_DISPATCHER::pLock. The
+// dispatch callback drops pLock before taking any surface spinlock.
+//
+// Dispatchers are looked up, created and destroyed with the GPU lock of
+// their GPU held, which the RM event alloc/free they do requires anyway.
+//
+MAKE_INTRUSIVE_LIST(SEM_ARMED_LIST, SEM_NOTIFIER_NODE, armedEntry);
+MAKE_INTRUSIVE_LIST(SEM_DISPATCH_PENDING_LIST, SEM_NOTIFIER_NODE, pendingEntry);
+
+typedef struct SEM_DISPATCHER
+{
+    struct SEM_DISPATCHER *pNext;
+    NvU32 gpuInstance;
+    NvHandle hClient;
+    NvHandle hEvent;
+    NvU32 notifyIndex;
+
+    /* Number of bindings using this dispatcher. GPU lock. */
+    NvU32 refCount;
+
+    NVOS10_EVENT_KERNEL_CALLBACK_EX callback;
+
+    /* Protects armedList, pendingList, activeDispatchers, node bArmed/bPending */
+    PORT_SPINLOCK *pLock;
+    SEM_ARMED_LIST armedList;
+
+    /*
+     * Armed nodes queued by running dispatch callbacks, walked outside of
+     * pLock. Nodes can't leave it, and can't be freed, while
+     * activeDispatchers is non-zero; the last dispatcher out empties it.
+     */
+    SEM_DISPATCH_PENDING_LIST pendingList;
+    volatile NvU32 activeDispatchers;
+} SEM_DISPATCHER;
+
+/* Per-GPU dispatcher lists, protected by that GPU's lock */
+static SEM_DISPATCHER *semsurfDispatchers[NV_MAX_DEVICES];
+
+static void _semsurfEventCallback(SEM_SHARED_DATA *pShared, SEM_NOTIFIER_NODE *pNode);
+
+/* Must be called with pNode->pShared->pSpinlock held */
 static void
-_semsurfUnregisterCallback
+_semsurfNodeArm
 (
-    SEM_NOTIFIER_NODE *pNotNode
+    SEM_NOTIFIER_NODE *pNode
+)
+{
+    SEM_DISPATCHER *pDisp = pNode->pDispatcher;
+
+    portSyncSpinlockAcquire(pDisp->pLock);
+    if (!pNode->bArmed)
+    {
+        pNode->bArmed = NV_TRUE;
+        listAppendExisting(&pDisp->armedList, pNode);
+    }
+    portSyncSpinlockRelease(pDisp->pLock);
+}
+
+/* Must be called with pNode->pShared->pSpinlock held, or after the node left notifierMap */
+static void
+_semsurfNodeDisarm
+(
+    SEM_NOTIFIER_NODE *pNode
+)
+{
+    SEM_DISPATCHER *pDisp = pNode->pDispatcher;
+
+    portSyncSpinlockAcquire(pDisp->pLock);
+    if (pNode->bArmed)
+    {
+        pNode->bArmed = NV_FALSE;
+        listRemove(&pDisp->armedList, pNode);
+    }
+    portSyncSpinlockRelease(pDisp->pLock);
+}
+
+/* Must be called with pShared->pSpinlock held */
+static void
+_semsurfArmAll
+(
+    SEM_SHARED_DATA *pShared
+)
+{
+    SEM_NOTIFIERIter it = mapIterAll(&pShared->notifierMap);
+
+    while (mapIterNext(&it))
+        _semsurfNodeArm(it.pValue);
+}
+
+/* Must be called with pShared->pSpinlock held */
+static void
+_semsurfDisarmAllIfIdle
+(
+    SEM_SHARED_DATA *pShared
+)
+{
+    SEM_NOTIFIERIter it;
+
+    if (mapCount(&pShared->listenerMap) != 0)
+        return;
+
+    it = mapIterAll(&pShared->notifierMap);
+    while (mapIterNext(&it))
+        _semsurfNodeDisarm(it.pValue);
+}
+
+//
+// Non-stall interrupt callback, called from the lockless ISR on Linux.
+// Same pending-list scheme as _gpuEngineEventNotificationListNotify().
+//
+static void
+_semsurfDispatchCallback
+(
+    void        *pArg,
+    void        *pData,
+    NvHandle     hEvent,
+    NvU32        data,
+    NvU32        status
+)
+{
+    SEM_DISPATCHER *pDisp = pArg;
+    SEM_ARMED_LISTIter it;
+    SEM_NOTIFIER_NODE *pIter, *pTail;
+
+    portSyncSpinlockAcquire(pDisp->pLock);
+
+    // Nothing has waiters; anything still pending belongs to another callback
+    if (listCount(&pDisp->armedList) == 0)
+    {
+        portSyncSpinlockRelease(pDisp->pLock);
+        return;
+    }
+
+    pDisp->activeDispatchers++;
+
+    it = listIterAll(&pDisp->armedList);
+    while (listIterNext(&it))
+    {
+        if (!it.pValue->bPending)
+        {
+            it.pValue->bPending = NV_TRUE;
+            listAppendExisting(&pDisp->pendingList, it.pValue);
+        }
+    }
+
+    //
+    // Another dispatcher may append to the pending list once pLock is
+    // dropped, so walk it by hand up to the tail seen here, like
+    // _gpuEngineEventNotificationListNotify() does.
+    //
+    pIter = listHead(&pDisp->pendingList);
+    pTail = listTail(&pDisp->pendingList);
+
+    portSyncSpinlockRelease(pDisp->pLock);
+
+    while (pIter != NULL)
+    {
+        _semsurfEventCallback(pIter->pShared, pIter);
+
+        if (pIter == pTail)
+            break;
+
+        pIter = listNext(&pDisp->pendingList, pIter);
+    }
+
+    portSyncSpinlockAcquire(pDisp->pLock);
+    if (--pDisp->activeDispatchers == 0)
+    {
+        SEM_NOTIFIER_NODE *pNext;
+
+        for (pIter = listHead(&pDisp->pendingList); pIter != NULL; pIter = pNext)
+        {
+            pNext = listNext(&pDisp->pendingList, pIter);
+            pIter->bPending = NV_FALSE;
+            listRemove(&pDisp->pendingList, pIter);
+        }
+    }
+    portSyncSpinlockRelease(pDisp->pLock);
+}
+
+//
+// Take pDisp->pLock once no dispatch callback is running, so that the
+// pending list is empty and no callback holds a pointer to any node.
+// Thread context only, see _gpuEngineEventNotificationListLockPreemptible().
+//
+static void
+_semsurfDispatcherLockIdle
+(
+    SEM_DISPATCHER *pDisp
+)
+{
+    do
+    {
+        portSyncSpinlockAcquire(pDisp->pLock);
+
+        if (pDisp->activeDispatchers == 0)
+            return;
+
+        portSyncSpinlockRelease(pDisp->pLock);
+
+        while (pDisp->activeDispatchers > 0)
+            osSpinLoop();
+    } while (NV_TRUE);
+}
+
+/*
+ * Take the node out of dispatch. The node must already be out of its
+ * surface's notifierMap, so nothing can arm it again. On return no dispatch
+ * callback references it.
+ */
+static void
+_semsurfNodeDetach
+(
+    SEM_NOTIFIER_NODE *pNode
+)
+{
+    SEM_DISPATCHER *pDisp = pNode->pDispatcher;
+
+    _semsurfDispatcherLockIdle(pDisp);
+    if (pNode->bArmed)
+    {
+        pNode->bArmed = NV_FALSE;
+        listRemove(&pDisp->armedList, pNode);
+    }
+    NV_ASSERT(!pNode->bPending);
+    portSyncSpinlockRelease(pDisp->pLock);
+}
+
+static void
+_semsurfDispatcherFree
+(
+    SEM_DISPATCHER *pDisp
 )
 {
     RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
 
-    if (pNotNode->hClient != NV01_NULL_OBJECT)
+    //
+    // Freeing the event waits for any running engine notification pass, so
+    // the callback can't run on pDisp after this.
+    //
+    if (pDisp->hEvent != NV01_NULL_OBJECT)
+        pRmApi->Free(pRmApi, pDisp->hClient, pDisp->hEvent);
+
+    NV_ASSERT(listCount(&pDisp->armedList) == 0);
+    NV_ASSERT(listCount(&pDisp->pendingList) == 0);
+
+    if (pDisp->pLock != NULL)
+        portSyncSpinlockDestroy(pDisp->pLock);
+
+    portMemFree(pDisp);
+}
+
+static NV_STATUS
+_semsurfDispatcherGet
+(
+    OBJGPU *pGpu,
+    KernelChannel *pKernelChannel,
+    NvU32 notifyIndex,
+    SEM_DISPATCHER **ppDisp
+)
+{
+    NV0005_ALLOC_PARAMETERS nv0005AllocParams;
+    RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
+    const NvU32 gpuInst = gpuGetInstance(pGpu);
+    SEM_DISPATCHER *pDisp;
+    NvHandle hClient = NV01_NULL_OBJECT;
+    NvHandle hSubdevice = NV01_NULL_OBJECT;
+    NV_STATUS status;
+
+    NV_ASSERT_OR_RETURN(gpuInst < NV_ARRAY_ELEMENTS(semsurfDispatchers),
+                        NV_ERR_INVALID_STATE);
+    NV_ASSERT(rmDeviceGpuLockIsOwner(gpuInst));
+
+    NV_ASSERT_OK_OR_RETURN(memmgrGetInternalClientHandles(pGpu,
+                                                          GPU_GET_MEMORY_MANAGER(pGpu),
+                                                          GPU_RES_GET_DEVICE(pKernelChannel),
+                                                          &hClient,
+                                                          NULL,
+                                                          &hSubdevice));
+
+    for (pDisp = semsurfDispatchers[gpuInst]; pDisp != NULL; pDisp = pDisp->pNext)
     {
-        pRmApi->Free(pRmApi,
-                     pNotNode->hClient,
-                     pNotNode->hEvent);
+        if ((pDisp->hClient == hClient) && (pDisp->notifyIndex == notifyIndex))
+        {
+            NV_ASSERT_OR_RETURN(pDisp->refCount < NV_U32_MAX, NV_ERR_INVALID_STATE);
+            pDisp->refCount++;
+            *ppDisp = pDisp;
+            return NV_OK;
+        }
     }
+
+    pDisp = portMemAllocNonPaged(sizeof(*pDisp));
+    NV_ASSERT_OR_RETURN(pDisp != NULL, NV_ERR_NO_MEMORY);
+    portMemSet(pDisp, 0, sizeof(*pDisp));
+
+    pDisp->gpuInstance = gpuInst;
+    pDisp->hClient = hClient;
+    pDisp->notifyIndex = notifyIndex;
+    pDisp->refCount = 1;
+    listInitIntrusive(&pDisp->armedList);
+    listInitIntrusive(&pDisp->pendingList);
+
+    pDisp->pLock = portSyncSpinlockCreate(portMemAllocatorGetGlobalNonPaged());
+    if (pDisp->pLock == NULL)
+    {
+        status = NV_ERR_NO_MEMORY;
+        goto failed;
+    }
+
+    pDisp->callback.func = _semsurfDispatchCallback;
+    pDisp->callback.arg = pDisp;
+
+    portMemSet(&nv0005AllocParams, 0, sizeof(nv0005AllocParams));
+    nv0005AllocParams.hParentClient = hClient;
+    nv0005AllocParams.hClass        = NV01_EVENT_KERNEL_CALLBACK_EX;
+    nv0005AllocParams.data          = NV_PTR_TO_NvP64(&pDisp->callback);
+    nv0005AllocParams.notifyIndex = notifyIndex |
+        NV01_EVENT_NONSTALL_INTR |
+        NV01_EVENT_WITHOUT_EVENT_DATA |
+        NV01_EVENT_SUBDEVICE_SPECIFIC |
+        DRF_NUM(0005, _NOTIFY_INDEX, _SUBDEVICE,
+                gpumgrGetSubDeviceInstanceFromGpu(pGpu));
+
+    status = pRmApi->Alloc(pRmApi,
+                           hClient,
+                           hSubdevice,
+                           &pDisp->hEvent,
+                           NV01_EVENT_KERNEL_CALLBACK_EX,
+                           &nv0005AllocParams,
+                           sizeof(nv0005AllocParams));
+    if (status != NV_OK)
+    {
+        NV_ASSERT_OK_FAILED("semaphore surface event alloc", status);
+        pDisp->hEvent = NV01_NULL_OBJECT;
+        goto failed;
+    }
+
+    pDisp->pNext = semsurfDispatchers[gpuInst];
+    semsurfDispatchers[gpuInst] = pDisp;
+
+    *ppDisp = pDisp;
+    return NV_OK;
+
+failed:
+    _semsurfDispatcherFree(pDisp);
+    return status;
+}
+
+static void
+_semsurfDispatcherPut
+(
+    SEM_DISPATCHER *pDisp
+)
+{
+    SEM_DISPATCHER **ppIter;
+
+    NV_ASSERT(rmDeviceGpuLockIsOwner(pDisp->gpuInstance));
+    NV_ASSERT_OR_RETURN_VOID(pDisp->refCount > 0);
+
+    if (--pDisp->refCount != 0)
+        return;
+
+    for (ppIter = &semsurfDispatchers[pDisp->gpuInstance];
+         *ppIter != NULL;
+         ppIter = &(*ppIter)->pNext)
+    {
+        if (*ppIter == pDisp)
+        {
+            *ppIter = pDisp->pNext;
+            break;
+        }
+    }
+
+    _semsurfDispatcherFree(pDisp);
+}
+
+/*
+ * Drop a binding that is no longer in its surface's notifierMap.
+ * GPU lock of the binding's GPU held.
+ */
+static void
+_semsurfNodeDestroy
+(
+    SEM_NOTIFIER_NODE *pNode
+)
+{
+    _semsurfNodeDetach(pNode);
+    _semsurfDispatcherPut(pNode->pDispatcher);
+    portMemFree(pNode);
 }
 
 static NvU64
@@ -282,17 +675,17 @@ _semsurfSetMonitoredValue
     *pMonitoredFence = value;
 }
 
+/*
+ * Process the listeners of an armed surface binding, from the dispatch
+ * callback. Disarms the binding if the surface has no listeners left.
+ */
 static void
 _semsurfEventCallback
 (
-    void        *pArg,
-    void        *pData,
-    NvHandle     hEvent,
-    NvU32        data,
-    NvU32        status
+    SEM_SHARED_DATA   *pShared,
+    SEM_NOTIFIER_NODE *pNode
 )
 {
-    SEM_SHARED_DATA *pShared = pArg;
     SEM_INDEX_LISTENERSIter ilIter;
     SEM_VALUE_LISTENERSIter vlIter;
     SEM_PENDING_NOTIFICATIONS notifications;
@@ -303,8 +696,6 @@ _semsurfEventCallback
     NvBool valuesChanged = NV_TRUE;
 
     NV_PRINTF(LEVEL_INFO, "SemMem(0x%08x, 0x%08x): Got a callback\n", pShared->hClient, pShared->hSemaphoreMem);
-    NV_PRINTF(LEVEL_INFO, "  hEvent: 0x%08x surf event: 0x%08x, data 0x%08x, status 0x%08x\n",
-              hEvent, hEvent, data, status);
 
     while (valuesChanged)
     {
@@ -366,6 +757,14 @@ _semsurfEventCallback
 
             _semsurfSetMonitoredValue(pShared, index, minWaitValue);
         }
+
+        //
+        // Must be decided under the spinlock: a waiter registered after this
+        // finds the node disarmed and arms it again before lowering the
+        // monitored fence.
+        //
+        if (mapCount(&pShared->listenerMap) == 0)
+            _semsurfNodeDisarm(pNode);
 
         portSyncSpinlockRelease(pShared->pSpinlock);
         NV_PRINTF(LEVEL_INFO, "SemMem(0x%08x, 0x%08x): Exited spinlock\n",
@@ -456,52 +855,6 @@ _semsurfDupMemory
     return NV_OK;
 }
 
-static NV_STATUS
-_semsurfRegisterCallback
-(
-    SemaphoreSurface *pSemSurf,
-    OBJGPU *pGpu,
-    KernelChannel *pKernelChannel,
-    SEM_NOTIFIER_NODE *pNotNode,
-    NvU32 notifyIndex
-)
-{
-    SEM_SHARED_DATA *pShared = pSemSurf->pShared;
-    NV0005_ALLOC_PARAMETERS nv0005AllocParams;
-    RM_API *pRmApi = rmapiGetInterface(RMAPI_GPU_LOCK_INTERNAL);
-    NvHandle hSubdevice = 0;
-
-    NV_ASSERT_OK_OR_RETURN(memmgrGetInternalClientHandles(pGpu,
-                                                          GPU_GET_MEMORY_MANAGER(pGpu),
-                                                          GPU_RES_GET_DEVICE(pKernelChannel),
-                                                          &pNotNode->hClient,
-                                                          NULL,
-                                                          &hSubdevice));
-
-    portMemSet(&nv0005AllocParams, 0, sizeof(nv0005AllocParams));
-    nv0005AllocParams.hParentClient = pNotNode->hClient;
-    nv0005AllocParams.hClass        = NV01_EVENT_KERNEL_CALLBACK_EX;
-    nv0005AllocParams.data          = NV_PTR_TO_NvP64(&pShared->callback);
-    nv0005AllocParams.notifyIndex = notifyIndex |
-        NV01_EVENT_NONSTALL_INTR |
-        NV01_EVENT_WITHOUT_EVENT_DATA |
-        NV01_EVENT_SUBDEVICE_SPECIFIC |
-        DRF_NUM(0005, _NOTIFY_INDEX, _SUBDEVICE,
-                gpumgrGetSubDeviceInstanceFromGpu(pGpu));
-
-    NV_ASSERT_OK_OR_RETURN(pRmApi->Alloc(pRmApi,
-                                         pNotNode->hClient,
-                                         hSubdevice,
-                                         &pNotNode->hEvent,
-                                         NV01_EVENT_KERNEL_CALLBACK_EX,
-                                         &nv0005AllocParams,
-                                         sizeof(nv0005AllocParams)));
-
-    pNotNode->nUsers = 1;
-
-    return NV_OK;
-}
-
 NV_STATUS
 _semsurfRemoveNotifyBinding
 (
@@ -522,9 +875,11 @@ _semsurfRemoveNotifyBinding
         return NV_OK;
     }
 
-    _semsurfUnregisterCallback(pNotNode);
+    portSyncSpinlockAcquire(pSemSurf->pShared->pSpinlock);
     mapRemove(&pSemSurf->pShared->notifierMap, pNotNode);
-    portMemFree(pNotNode);
+    portSyncSpinlockRelease(pSemSurf->pShared->pSpinlock);
+
+    _semsurfNodeDestroy(pNotNode);
 
     return NV_OK;
 }
@@ -618,9 +973,13 @@ _semsurfDestroyShared
          mapIterNext(&notIter);
          notIter = mapIterAll(&pShared->notifierMap))
     {
-        _semsurfUnregisterCallback(notIter.pValue);
-        mapRemove(&pShared->notifierMap, notIter.pValue);
-        portMemFree(notIter.pValue);
+        SEM_NOTIFIER_NODE *pNotNode = notIter.pValue;
+
+        portSyncSpinlockAcquire(pShared->pSpinlock);
+        mapRemove(&pShared->notifierMap, pNotNode);
+        portSyncSpinlockRelease(pShared->pSpinlock);
+
+        _semsurfNodeDestroy(pNotNode);
     }
 
     mapDestroy(&pShared->notifierMap);
@@ -844,9 +1203,6 @@ semsurfConstruct_IMPL
                          goto ctorFailed);
     }
 
-    pShared->callback.func = _semsurfEventCallback;
-    pShared->callback.arg = pShared;
-
     for (i = 0; _semsurfValidateIndex(pShared, i); i++)
     {
         _semsurfSetMonitoredValue(pShared, i, NV_U64_MAX);
@@ -968,6 +1324,8 @@ semsurfDestruct_IMPL
             portMemFree(pIndexListeners);
         }
     }
+
+    _semsurfDisarmAllIfIdle(pShared);
 
     portSyncSpinlockRelease(pShared->pSpinlock);
     NV_PRINTF(LEVEL_INFO, "SemMem(0x%08x, 0x%08x): Exited spinlock\n",
@@ -1156,32 +1514,44 @@ semsurfCtrlCmdBindChannel_IMPL
         }
         portMemSet(pNotNode, 0, sizeof(*pNotNode));
 
-        rmStatus = _semsurfRegisterCallback(pSemSurf,
-                                            pGpu,
-                                            pKernelChannel,
-                                            pNotNode,
-                                            pParams->notifyIndices[i]);
+        rmStatus = _semsurfDispatcherGet(pGpu,
+                                         pKernelChannel,
+                                         pParams->notifyIndices[i],
+                                         &pNotNode->pDispatcher);
         if (rmStatus != NV_OK)
         {
             portMemFree(pNotNode);
             goto undoBound;
         }
 
+        pNotNode->pShared = pSemSurf->pShared;
+        pNotNode->nUsers = 1;
+
+        portSyncSpinlockAcquire(pSemSurf->pShared->pSpinlock);
+
         if (!mapInsertExisting(&pSemSurf->pShared->notifierMap,
                                mapKey,
                                pNotNode))
         {
+            portSyncSpinlockRelease(pSemSurf->pShared->pSpinlock);
+
             NV_PRINTF(LEVEL_WARNING,
                       "SemSurf(0x%08x, 0x%08x): "
                       "Duplicate entry found for new event notifier map node\n",
                       RES_GET_CLIENT_HANDLE(pSemSurf),
                       RES_GET_HANDLE(pSemSurf));
 
-            _semsurfUnregisterCallback(pNotNode);
+            _semsurfDispatcherPut(pNotNode->pDispatcher);
             portMemFree(pNotNode);
             rmStatus = NV_ERR_INVALID_STATE;
             goto undoBound;
         }
+
+        // Keep the invariant: a surface with listeners has all bindings armed
+        if (mapCount(&pSemSurf->pShared->listenerMap) != 0)
+            _semsurfNodeArm(pNotNode);
+
+        portSyncSpinlockRelease(pSemSurf->pShared->pSpinlock);
 
         NV_PRINTF(LEVEL_INFO,
                   "SemSurf(0x%08x, 0x%08x): "
@@ -1338,6 +1708,7 @@ _semsurfSetValueAndNotify
             }
 
             _semsurfSetMonitoredValue(pSemSurf->pShared, index, minWaitValue);
+            _semsurfDisarmAllIfIdle(pSemSurf->pShared);
         }
 
         portSyncSpinlockRelease(pSemSurf->pShared->pSpinlock);
@@ -1397,6 +1768,15 @@ _semsurfAddWaiter
               pSemSurf->pShared->hClient,
               pSemSurf->pShared->hSemaphoreMem);
     portSyncSpinlockAcquire(pSemSurf->pShared->pSpinlock);
+
+    //
+    // Arm the surface's bindings before the monitored fence is lowered below,
+    // so that the dispatch callback for an interrupt caused by it visits this
+    // surface. If the surface already has listeners, they're armed already.
+    // Undone at failureUnlock if no listener is left.
+    //
+    if (mapCount(&pSemSurf->pShared->listenerMap) == 0)
+        _semsurfArmAll(pSemSurf->pShared);
 
     pIndexListeners = mapFind(&pSemSurf->pShared->listenerMap, index);
 
@@ -1666,6 +2046,8 @@ failureUnlock:
         _semsurfSetMonitoredValue(pSemSurf->pShared, index, prevMinWaitValue);
     }
 
+    _semsurfDisarmAllIfIdle(pSemSurf->pShared);
+
     portSyncSpinlockRelease(pSemSurf->pShared->pSpinlock);
     NV_PRINTF(LEVEL_INFO, "SemMem(0x%08x, 0x%08x): Exited spinlock\n",
               pSemSurf->pShared->hClient, pSemSurf->pShared->hSemaphoreMem);
@@ -1834,6 +2216,7 @@ _semsurfDelWaiter
             mapRemove(&pSemSurf->pShared->listenerMap, pIndexListeners);
             portMemFree(pIndexListeners);
             _semsurfSetMonitoredValue(pSemSurf->pShared, index, NV_U64_MAX);
+            _semsurfDisarmAllIfIdle(pSemSurf->pShared);
         }
         else
         {
